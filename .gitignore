@@ -1,0 +1,12 @@
+.venv/
+target/
+desktop/state/
+__pycache__/
+*.pyc
+# Local investigation archive, excluded from the public source repository.
+/research/
+/predictor/
+# Local agent/account configuration is not application source.
+/.agents/
+/.codex/
+/.aws/

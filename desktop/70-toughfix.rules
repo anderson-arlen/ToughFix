@@ -1,0 +1,5 @@
+# Olympus TG-1 whole camera disk only; access for the active local desktop seat.
+SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="012d", TAG+="uaccess"
+SUBSYSTEM=="scsi_generic", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="012d", TAG+="uaccess"
+# Start only the desktop user's service, after the SG endpoint is available.
+SUBSYSTEM=="scsi_generic", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="012d", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="toughfix-camera.service"

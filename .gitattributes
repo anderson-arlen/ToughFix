@@ -1,0 +1,8 @@
+* text=auto
+
+# Matplotlib output contains insignificant trailing spaces in SVG path data.
+docs/figures/*.svg linguist-generated=true whitespace=-blank-at-eol
+
+# Preserve the padding of the fixed-width USNO test input.
+tests/fixtures/orbit-discontinuity-eop.txt whitespace=-blank-at-eol
+tests/fixtures/*.cep binary

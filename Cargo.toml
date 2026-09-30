@@ -1,0 +1,40 @@
+[package]
+name = "toughfix"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+description = "Olympus TG-1 GPS assistance desktop monitor and updater"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+flate2 = "1"
+gtk = { package = "gtk4", version = "0.11.3" }
+ksni = { version = "0.3.6", features = ["blocking"] }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+nalgebra = "0.34"
+ode_solvers = "0.6.2"
+levenberg-marquardt = "0.15"
+erfars = "0.2"
+zip = { version = "4", default-features = false, features = ["deflate"] }
+rayon = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+regex = "1"
+quick-xml = "0.41"
+
+[patch.crates-io]
+# Upstream 0.6.2 needs DOP853 stage-time and dense-endpoint corrections.
+ode_solvers = { path = "vendor/ode_solvers" }
+# Keep the validated numerical stack; replace only Simba's archived macro crate.
+simba = { path = "vendor/simba" }
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+lto = "thin"
+strip = true

@@ -1,0 +1,5 @@
+{
+  "command": "0c00000001002c910b000000",
+  "response": "0c000000030001200b000000",
+  "description": "Successful TG-1 commit framing only; no device identity, serial or location data."
+}
