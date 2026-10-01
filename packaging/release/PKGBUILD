@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# Package the release workflow's already-built, reviewed staging tree.
+pkgname=toughfix
+pkgver="${TOUGHFIX_RELEASE_VERSION:?TOUGHFIX_RELEASE_VERSION must be supplied}"
+pkgrel=1
+pkgdesc='Automatic GPS assistance and camera status for the Olympus Tough TG-1'
+arch=('x86_64')
+url='https://github.com/anderson-arlen/ToughFix'
+license=('MIT')
+depends=('glibc' 'libgcc' 'gtk4' 'libadwaita>=1.4' 'udisks2' 'systemd' 'kmod' 'hicolor-icon-theme')
+options=('!strip' '!debug')
+install=toughfix.install
+
+package() {
+    cp -a --no-preserve=ownership "$startdir/stage/." "$pkgdir/"
+}

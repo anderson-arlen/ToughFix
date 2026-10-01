@@ -26,6 +26,13 @@ fn main() {
     }
 }
 fn run() -> Result<()> {
+    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
+        println!(
+            "ToughFix {}",
+            option_env!("TOUGHFIX_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+        );
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("storage-release") {
         return storage::fallback();
     }

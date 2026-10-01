@@ -32,9 +32,19 @@ impl CameraStartup {
     }
 
     pub fn installed(&self) -> bool {
+        self.installed_with_system_dirs(&[
+            PathBuf::from("/etc/systemd/user"),
+            PathBuf::from("/usr/lib/systemd/user"),
+        ])
+    }
+
+    fn installed_with_system_dirs(&self, dirs: &[PathBuf]) -> bool {
         self.config
             .join("systemd/user/toughfix-camera.service")
             .is_file()
+            || dirs
+                .iter()
+                .any(|dir| dir.join("toughfix-camera.service").is_file())
     }
 
     fn marker(&self) -> PathBuf {
@@ -86,6 +96,27 @@ pub fn should_exit(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn system_package_startup_preference_stays_in_user_config() {
+        let temp = crate::test_support::Temp::new();
+        let system = temp.path().join("system-units");
+        fs::create_dir_all(&system).unwrap();
+        let config = temp.path().join("user-config");
+        let startup = CameraStartup::at(config.clone()).unwrap();
+        assert!(!startup.installed_with_system_dirs(std::slice::from_ref(&system)));
+        fs::write(system.join("toughfix-camera.service"), b"system unit").unwrap();
+        assert!(startup.installed_with_system_dirs(std::slice::from_ref(&system)));
+        startup.set_enabled(false).unwrap();
+        assert!(config.join("toughfix/camera-start-disabled").is_file());
+        assert!(!startup.enabled().unwrap());
+        startup.set_enabled(true).unwrap();
+        assert!(startup.enabled().unwrap());
+        assert_eq!(
+            fs::read(system.join("toughfix-camera.service")).unwrap(),
+            b"system unit"
+        );
+    }
 
     #[test]
     fn connection_startup_choice_survives_reopen() {

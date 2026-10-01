@@ -74,6 +74,13 @@ Cargo.lock pins dependencies.
 
 ## Install or update
 
+On Arch, a GitHub release provides an x86_64 `.pkg.tar.zst` and `SHA256SUMS`.
+Install it with `sudo pacman -U ./toughfix-*.pkg.tar.zst`. The package owns
+`/usr/bin/toughfix`, the launcher, icon, camera unit, udev rule, driver setting,
+and MIT license. Package hooks reload udev and logged-in users' service definitions
+without restarting an active camera operation. Preferences still use
+`$XDG_CONFIG_HOME` or `~/.config`, and runtime data stays in the user's state directory.
+
 From this checkout, as your ordinary desktop user:
 
 ```sh

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ToughFix
+Comment=Olympus TG-1 GPS assistance and camera status
+Exec=/usr/bin/toughfix
+Icon=toughfix
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+DBusActivatable=false

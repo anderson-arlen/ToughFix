@@ -1,0 +1,120 @@
+name: Arch x86_64 release
+
+on:
+  push:
+    tags: ['v*']
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arch-release-${{ github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+      RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Install official Arch dependencies
+        run: >-
+          pacman -Syu --noconfirm --needed
+          rust pkgconf gtk4 libadwaita dbus systemd udisks2 kmod
+          github-cli git desktop-file-utils
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          versions=$(bash scripts/release-version.sh "$RELEASE_TAG")
+          mapfile -t versions <<< "$versions"
+          display_version=${versions[0]}
+          arch_version=${versions[1]}
+          prerelease=false
+          [[ $display_version != *-* ]] || prerelease=true
+          if [[ -n $RELEASE_IS_PRERELEASE && $RELEASE_IS_PRERELEASE != "$prerelease" ]]; then
+            echo "Tag and GitHub release disagree about prerelease status" >&2
+            exit 1
+          fi
+          echo "display=$display_version" >> "$GITHUB_OUTPUT"
+          echo "arch=$arch_version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+      - name: Create unprivileged build user
+        run: |
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          install -d -m 700 -o builder -g builder /tmp/toughfix-runtime
+
+      - name: Build and test without camera access
+        env:
+          TOUGHFIX_BUILD_VERSION: ${{ steps.version.outputs.display }}
+          XDG_RUNTIME_DIR: /tmp/toughfix-runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          runuser -u builder -- cargo fmt --all -- --check
+          runuser -u builder -- dbus-run-session -- make check
+          runuser -u builder -- cargo build --release --locked
+          runuser -u builder -- target/release/toughfix --version | \
+            grep -Fx "ToughFix $TOUGHFIX_BUILD_VERSION"
+
+      - name: Stage and build Arch package
+        env:
+          TOUGHFIX_RELEASE_VERSION: ${{ steps.version.outputs.arch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -o builder -g builder release-package
+          install -o builder -g builder -m 0644 packaging/release/PKGBUILD release-package/PKGBUILD
+          install -o builder -g builder -m 0644 packaging/release/toughfix.install release-package/toughfix.install
+          runuser -u builder -- target/release/toughfix install --system-package \
+            --destdir "$GITHUB_WORKSPACE/release-package/stage"
+          runuser -u builder -- desktop-file-validate \
+            release-package/stage/usr/share/applications/org.toughfix.Desktop.desktop
+          runuser -u builder -- bash -c 'cd "$1" && makepkg --clean --force --noconfirm' _ \
+            "$GITHUB_WORKSPACE/release-package"
+          packages=(release-package/toughfix-*.pkg.tar.zst)
+          [[ ${#packages[@]} -eq 1 && -f ${packages[0]} ]]
+          bsdtar -tf "${packages[0]}" | grep -Fx 'usr/bin/toughfix'
+          bsdtar -tf "${packages[0]}" | grep -Fx 'usr/lib/systemd/user/toughfix-camera.service'
+          bsdtar -xOf "${packages[0]}" .PKGINFO | \
+            grep -Fx "pkgver = $TOUGHFIX_RELEASE_VERSION-1"
+          (cd release-package && sha256sum toughfix-*.pkg.tar.zst > SHA256SUMS)
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_IS_PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if existing_prerelease=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease'); then
+            [[ $existing_prerelease == "$RELEASE_IS_PRERELEASE" ]] || {
+              echo 'Existing release has the wrong prerelease status' >&2
+              exit 1
+            }
+          else
+            args=(--verify-tag --generate-notes --title "$RELEASE_TAG")
+            if [[ $RELEASE_IS_PRERELEASE == true ]]; then
+              args+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "${args[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            release-package/toughfix-*.pkg.tar.zst release-package/SHA256SUMS --clobber

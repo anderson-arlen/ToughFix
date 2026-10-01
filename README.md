@@ -30,13 +30,26 @@ the camera's normal GPS operation.
 
 ## Install and use
 
-You need Linux, Rust 1.92 or newer, a C toolchain, `pkg-config`, and development
+Building from source requires Linux, Rust 1.92 or newer, a C toolchain, `pkg-config`, and development
 packages for GTK 4 and Libadwaita 1.4 or newer. On Arch Linux the build prerequisites
 are `rust`, `base-devel`, `pkgconf`, `gtk4`, and `libadwaita`. Automatic camera launch also needs systemd
 and an active graphical session. The tray uses StatusNotifierItem, supported
 by desktops such as KDE and by Waybar configurations with a tray.
 
-From the checkout, as your ordinary desktop user:
+On Arch Linux, download the x86_64 `.pkg.tar.zst` from
+[GitHub Releases](https://github.com/anderson-arlen/ToughFix/releases), then install it:
+
+```sh
+sudo pacman -U ./toughfix-*.pkg.tar.zst
+```
+
+The package includes camera access rules, the driver configuration, and the
+camera-triggered user service. No separate `make install` or sudo setup is
+needed. Preferences and downloaded satellite data remain in your user account.
+Reconnect the camera after installation. Quit a running ToughFix after any
+camera operation, then reopen it to use an update.
+
+To build from a checkout instead, run as your ordinary desktop user:
 
 ```sh
 make install
@@ -543,6 +556,13 @@ The native checks cover protocol framing and commit order, independent CEP
 decoding, health lifecycles, stale-data rejection, atomic publication,
 camera-associated receipts, and installation. CI runs the checks and a locked
 release build on Rust 1.92 and stable, plus a weekly dependency-advisory audit.
+
+Pushing a version tag such as `v0.1.0` builds and tests the tagged source in an
+Arch container as an unprivileged user, then creates a GitHub release containing
+the pacman package and `SHA256SUMS`. Tags ending in `-alpha.N`, `-beta.N`, or
+`-rc.N` create prereleases; Arch versions use `alphaN`, `betaN`, or `rcN` so
+they sort before the stable release. Publishing a GitHub release also runs the
+package workflow. The executable's `--version` output reflects its release tag.
 Tests do not need a camera or the private investigation archive.
 `toughfix predict` supports offline experiments;
 `toughfix audit` runs the separate RK4 check.

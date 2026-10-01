@@ -32,7 +32,7 @@ jobs:
       - name: Install native build prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y build-essential pkg-config libgtk-4-dev dbus systemd
+          sudo apt-get install --no-install-recommends -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev dbus systemd
       - name: Prepare isolated runtime directory
         run: |
           install -d -m 700 "$RUNNER_TEMP/toughfix-runtime"

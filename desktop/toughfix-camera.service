@@ -1,0 +1,15 @@
+[Unit]
+Description=ToughFix camera connection
+Requisite=graphical-session.target
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionUser=!root
+ConditionEnvironment=|DISPLAY
+ConditionEnvironment=|WAYLAND_DISPLAY
+
+[Service]
+Type=exec
+ExecCondition=/usr/bin/test ! -e "%E/toughfix/camera-start-disabled"
+ExecStart=/usr/bin/toughfix --background --hotplug
+ExecStopPost=-/usr/bin/toughfix storage-release
+Restart=no

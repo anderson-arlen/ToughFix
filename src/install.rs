@@ -197,6 +197,42 @@ fn install(options: &Options, binary: &Path) -> Result<()> {
     );
     Ok(())
 }
+
+/// Package-managed files use /usr and resolve preferences for the desktop user
+/// at runtime. Staging never runs udev, modprobe, or a user service.
+fn install_system_package(stage: &Path, binary: &Path) -> Result<()> {
+    let bytes = fs::read(binary)?;
+    let files: &[(&str, &[u8], u32)] = &[
+        ("/usr/bin/toughfix", &bytes, 0o755),
+        (
+            "/usr/share/applications/org.toughfix.Desktop.desktop",
+            include_bytes!("../desktop/org.toughfix.Desktop.desktop"),
+            0o644,
+        ),
+        (
+            "/usr/share/icons/hicolor/scalable/apps/toughfix.svg",
+            ICON,
+            0o644,
+        ),
+        (
+            "/usr/lib/systemd/user/toughfix-camera.service",
+            include_bytes!("../desktop/toughfix-camera.service"),
+            0o644,
+        ),
+        ("/usr/lib/udev/rules.d/70-toughfix.rules", RULE_BYTES, 0o644),
+        ("/usr/lib/modules-load.d/toughfix.conf", MODULE_BYTES, 0o644),
+        (
+            "/usr/share/licenses/toughfix/LICENSE",
+            include_bytes!("../LICENSE"),
+            0o644,
+        ),
+    ];
+    for (path, content, mode) in files {
+        files::atomic_mode(&staged(Path::new(path), Some(stage))?, content, Some(*mode))?;
+    }
+    println!("System package staged at {}", stage.display());
+    Ok(())
+}
 pub fn cli(mut args: impl Iterator<Item = String>) -> Result<()> {
     let home = PathBuf::from(env::var_os("HOME").context("HOME is unavailable")?);
     let mut prefix = home.join(".local");
@@ -205,6 +241,7 @@ pub fn cli(mut args: impl Iterator<Item = String>) -> Result<()> {
     let mut stage = None;
     let mut camera = true;
     let mut camera_only = false;
+    let mut system_package = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--prefix" => prefix = args.next().context("--prefix needs a path")?.into(),
@@ -234,14 +271,27 @@ pub fn cli(mut args: impl Iterator<Item = String>) -> Result<()> {
                 }
             }
             "--camera-only" => camera_only = true,
+            "--system-package" => system_package = true,
             "--help" | "-h" => {
                 println!(
-                    "toughfix install [--prefix PATH] [--data-dir PATH] [--config-dir PATH] [--destdir PATH] [--camera-access 0|1] [--camera-only]\nPer-user installation; sudo is requested only for camera setup. Never starts an updater job."
+                    "toughfix install [--prefix PATH] [--data-dir PATH] [--config-dir PATH] [--destdir PATH] [--camera-access 0|1] [--camera-only]\ntoughfix install --system-package --destdir PATH\nPer-user installation; sudo is requested only for camera setup. System packaging requires a staging directory. Never starts an updater job."
                 );
                 return Ok(());
             }
             _ => bail!("Unknown installation option {arg}"),
         }
+    }
+    if system_package {
+        ensure!(
+            !camera_only,
+            "--system-package cannot be combined with --camera-only"
+        );
+        return install_system_package(
+            stage
+                .as_deref()
+                .context("--system-package requires an absolute --destdir")?,
+            &env::current_exe()?,
+        );
     }
     if camera_only {
         return camera_access(stage.as_deref(), true);
@@ -275,6 +325,51 @@ mod tests {
         os::unix::fs::PermissionsExt,
         time::{Duration, Instant},
     };
+    #[test]
+    fn system_package_stages_shared_files_and_keeps_preferences_per_user() {
+        let temp = Temp::new();
+        let binary = temp.path().join("toughfix");
+        files::atomic_mode(&binary, b"#!/bin/sh\nexit 0\n", Some(0o755)).unwrap();
+        let stage = temp.path().join("stage");
+        install_system_package(&stage, &binary).unwrap();
+        assert_eq!(
+            fs::read(stage.join("usr/bin/toughfix")).unwrap(),
+            fs::read(&binary).unwrap()
+        );
+        assert_eq!(
+            fs::read(stage.join("usr/lib/udev/rules.d/70-toughfix.rules")).unwrap(),
+            RULE_BYTES
+        );
+        assert!(stage.join("usr/lib/modules-load.d/toughfix.conf").is_file());
+        assert!(stage.join("usr/share/licenses/toughfix/LICENSE").is_file());
+        assert!(!stage.join("etc").exists());
+        let launcher =
+            fs::read_to_string(stage.join("usr/share/applications/org.toughfix.Desktop.desktop"))
+                .unwrap();
+        assert!(launcher.contains("Exec=/usr/bin/toughfix\n"));
+        assert!(!launcher.contains("--config-dir"));
+        let service =
+            fs::read_to_string(stage.join("usr/lib/systemd/user/toughfix-camera.service")).unwrap();
+        assert!(service.contains("\"%E/toughfix/camera-start-disabled\""));
+        assert!(!service.contains("--config-dir"));
+        let unit = temp.path().join("toughfix-camera.service");
+        fs::write(
+            &unit,
+            service.replace("/usr/bin/toughfix", binary.to_str().unwrap()),
+        )
+        .unwrap();
+        let result = Command::new("systemd-analyze")
+            .args(["--user", "verify"])
+            .arg(unit)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(cli(["--system-package".to_string()].into_iter()).is_err());
+    }
     #[test]
     fn staged_native_install_preserves_startup_choice_and_running_inode() {
         let temp = Temp::new();

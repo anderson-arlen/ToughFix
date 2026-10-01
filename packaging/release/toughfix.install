@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: MIT
+_toughfix_reload() {
+  local manager runtime uid user
+  udevadm control --reload-rules || true
+  for manager in /run/user/[0-9]*/systemd/private; do
+    [[ -S "$manager" ]] || continue
+    runtime="${manager%/systemd/private}"
+    uid="${runtime##*/}"
+    user="$(/usr/bin/getent passwd "$uid" | /usr/bin/cut -d: -f1)"
+    [[ -n "$user" ]] || continue
+    # Reload definitions without restarting an app that may be using a camera.
+    /usr/bin/systemctl --user --machine="${user}@.host" daemon-reload || true
+  done
+}
+
+post_install() {
+  _toughfix_reload
+  modprobe sg || true
+  printf 'Reconnect your TG-1 in USB Storage mode to activate ToughFix.\n'
+}
+post_upgrade() {
+  post_install
+  printf 'Quit a running ToughFix after camera operations finish, then reopen it.\n'
+}
+post_remove() {
+  _toughfix_reload
+}

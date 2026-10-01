@@ -32,6 +32,7 @@ install-camera-access: build
 	./target/release/toughfix install --camera-only --destdir $(call quote,$(DESTDIR))
 
 check:
+	bash scripts/release-version-test.sh
 	cargo test --locked
 	cargo clippy --locked --all-targets -- -D warnings
 
