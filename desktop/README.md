@@ -1,17 +1,51 @@
 # ToughFix desktop
 
-The Rust application uses GTK 4 for the window and StatusNotifierItem (`ksni`)
+The Rust application uses GTK 4 with Libadwaita for the window and StatusNotifierItem (`ksni`)
 for the tray. It supports Wayland/X11 desktops with a tray host, including
 Hyprland with Waybar. The tray exists only while an Olympus TG-1 is connected
 in USB Storage mode. Left-click opens the window; its menu offers Open and
 Quit. Without a tray host, the window opens and explains the issue.
 
-The dashboard shows:
+Activity and progress stay pinned above the scrolling content, including in a
+small window or while viewing Advanced details. The main view shows an embedded
+camera illustration and health snapshot, a colored battery-shaped gauge,
+an SD card graphic showing capacity, a storage-use bar and free space,
+GPS assistance summary with a slowly rotating globe and orbiting satellite
+dots, and last confirmed update. The illustration pauses when hidden and
+respects the desktop animation preference. Idle connection status
+appears only in the activity panel. **Camera**, **Advanced**, and **Settings**
+are tabs in one window; **Settings** contains the
+startup and automatic-update preferences. **Refresh satellite data** in the
+GPS assistance section refreshes observations and predictions; manual upload
+controls are in **Advanced**. The refresh icon beside the snapshot age reads a new
+battery, health and SD-card snapshot without uploading GPS data. It briefly
+unmounts and remounts the card; a busy card is left alone. Snapshot age appears
+beside health and beneath the battery gauge, and advances while the window is open.
+Navigation uses Libadwaita's native icon-and-label view switcher in the header,
+with a bottom navigation bar below 520 logical pixels. Native controls keep
+their theme styling; custom CSS is limited to content cards and labels.
+
+The main window starts at 560 × 660. On Hyprland, ToughFix requests floating
+placement for its own window, without editing compositor
+configuration. Later resizes and placement changes are left to the user. Other
+desktops retain their normal placement policy. The battery bolt means USB is
+connected; active charging is not exposed by the camera. Unknown battery and
+free-space readings are shown as unavailable, rather than zero or empty.
+
+The activity panel identifies satellite health checks, observation downloads,
+calculation, validation, and every camera upload stage. Downloads and checks
+use animated progress; calculations count completed satellites, and transfers
+report actual bytes. Indeterminate stages never show a made-up percentage.
+Camera errors and mount failures appear at the top too.
+
+**Advanced** shows:
 
 - Camera connection, firmware, GPS interface, and reported battery level.
-  These are communication checks, not an internal GPS diagnostic.
-- Live storage capacity/free space and Linux mounts. Block-device capacity
-  is available as a fallback when camera queries cannot run.
+  Camera readings are timestamped snapshots from the initial unmounted check
+  or an upload, or an explicitly requested camera refresh; status is not polled
+  through vendor sessions.
+- Live mounted-storage capacity/free space from Linux filesystem statistics,
+  and Linux mounts. Block-device capacity is available as a fallback.
 - Separate latest fitting and health-observation epochs, NOAA/IGS source and age,
   health-check age, and excluded satellites.
 - The observed arc used to fit predictions, validity, weekly coverage, hash,
@@ -21,17 +55,21 @@ The dashboard shows:
 - Upload phase, progress, errors, and reasons an upload is blocked.
 
 Camera connection starts ToughFix in the background; no login startup is needed.
-A camera-triggered instance exits five seconds after disconnection if its window
-is hidden. An open window stays available. A manually launched instance keeps
-monitoring when its window is closed. Quit waits for an active camera operation
+A hidden instance exits five seconds after disconnection. An open window stays
+available. Closing the window hides it while a camera is connected; closing
+without a camera quits the app, including manually launched instances. There
+is no window Quit button; Quit remains in the tray menu and waits for an active camera operation
 to finish. During queries, transfer, validation, commit, and close,
 the tray is amber and says **Do not unplug**. Red indicates a camera error or
 a required reconnection. Mounted storage must still be ejected afterward.
 
 ## Build and run
 
-Build prerequisites: Rust 1.92+, a C toolchain, pkg-config, and GTK 4 development
-packages. On Arch these are `rust`, `base-devel`, `pkgconf`, and `gtk4`.
+Build prerequisites: Rust 1.92+, a C toolchain, pkg-config, and development
+packages for GTK 4 and Libadwaita 1.4+. On Arch these are `rust`, `base-devel`,
+`pkgconf`, `gtk4`, and `libadwaita`.
+UDisks2 (`udisks2` on Arch) is required for mounting camera storage after the
+connection-time update.
 Cargo.lock pins dependencies.
 
 ## Install or update
@@ -57,6 +95,7 @@ USB Storage mode, using [SYSTEMD_USER_WANTS](https://raw.githubusercontent.com/s
 it never runs the GUI from udev or as root. Reconnect the camera once afterward. Subsequent connections grant the
 active local desktop user access automatically; the app does not run as root.
 Ordinary updates skip sudo when these files and the driver are already set up.
+An update that changes the camera rule asks for sudo again to replace it.
 Do **not** run `sudo make install`.
 
 In the window, **Settings → Start when camera connects** controls automatic
@@ -144,10 +183,45 @@ while the app is running; failures retry after five minutes. Downloads and
 computation run separately from the camera monitor and GTK thread.
 
 A connected camera automatically receives a changed eligible file when
-**Update automatically when connected** is enabled (the default). Matching
-confirmed commits are skipped. Disabling automatic uploads still permits data
+**Update automatically when connected** is enabled (the default). The
+TG-1-specific udev rule sets [UDISKS_AUTO](https://storaged.org/udisks/docs/udisks.8.html)
+to hold desktop automount while this initial update runs. Once it finishes,
+ToughFix mounts the card through UDisks2, ready for browsing. If storage has
+already mounted, ToughFix requests one normal unmount during this initial
+check, including a health and battery reading. A busy card cancels the check;
+partitions already unmounted are restored. No forced unmount occurs. Mounts
+that appear after this preparation cancel further automatic camera access.
+After the initial check, browsing storage is never interrupted automatically.
+Camera identity, battery and SD card checks run before GPS-specific commands;
+a failed storage check prevents the GPS update.
+The app permits one automatic upload per USB attachment; later prediction
+refreshes leave the camera alone until a manual upload or a new connection.
+A brief SCSI disk reattachment preserves the USB attachment identity and does
+not restart status polling. A matching acknowledged commit skips the transfer;
+a health/battery check still runs once before storage mounts. A real USB serial
+identifies history through an explicit prior link or an identical saved PTP
+serial hash. Old receipts are linked during the next identified session without
+changing the recorded commit time. Health snapshots are saved by USB serial
+and shown with their original timestamp after a restart; they are never
+reused for another camera or presented as live polling. This is acknowledged upload history,
+not readback of the file stored on the camera.
+
+An unsuccessful initial refresh still permits one health/battery check before
+releasing storage; a 90-second wait limit also
+releases it if sources or calculation take too long. An active upload finishes
+and closes its session before mounting. A late forecast waits until the next
+connection. Disabling automatic updates permits one initial status snapshot,
+then mounts the card. [ExecStopPost](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#ExecStopPost=)
+service cleanup mounts storage when startup is disabled or the app fails; it
+avoids racing an existing ToughFix instance. Mounting uses the desktop user's
+UDisks authorization, without sudo or an authentication prompt. If automatic
+mounting fails, the dashboard reports it and the card can be opened manually
+in a file manager.
+
+Disabling automatic uploads still permits data
 refresh and manual uploads. **Refresh satellite data** runs the complete data
-and prediction pipeline. A hidden camera-triggered app exits after disconnect,
+and prediction pipeline; it does not repeat camera queries. A hidden
+camera-triggered app exits after disconnect,
 so it does not perform scheduled work while it is absent; the next connection
 refreshes the inputs. Closing an open dashboard keeps a manually launched app
 running if you want ongoing refreshes.

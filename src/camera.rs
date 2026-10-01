@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::{
+    ffi::CString,
     fs::{self, File, OpenOptions},
     os::{
         fd::AsRawFd,
@@ -24,6 +25,18 @@ const REQUIRED: &[u16] = &[
 #[derive(Debug)]
 struct ReconnectRequired;
 
+#[derive(Debug)]
+struct StorageMounted;
+impl std::fmt::Display for StorageMounted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Unmount camera storage before checking the camera or uploading GPS assistance")
+    }
+}
+impl std::error::Error for StorageMounted {}
+pub fn storage_in_use(error: &anyhow::Error) -> bool {
+    error.is::<StorageMounted>()
+}
+
 impl std::fmt::Display for ReconnectRequired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Camera session is uncertain; reconnect before retrying")
@@ -41,11 +54,17 @@ pub fn hash(bytes: &[u8]) -> String {
 }
 
 pub fn discover() -> Vec<Device> {
-    discover_at(
+    discover_checked().unwrap_or_default()
+}
+
+pub(crate) fn discover_checked() -> Result<Vec<Device>> {
+    let mounts = fs::read_to_string("/proc/self/mountinfo")
+        .context("Cannot verify whether camera storage is mounted")?;
+    Ok(discover_at(
         Path::new("/sys/class/block"),
         Path::new("/dev"),
-        &fs::read_to_string("/proc/self/mountinfo").unwrap_or_default(),
-    )
+        &mounts,
+    ))
 }
 
 fn discover_at(root: &Path, devices: &Path, mounts: &str) -> Vec<Device> {
@@ -87,27 +106,89 @@ fn discover_at(root: &Path, devices: &Path, mounts: &str) -> Vec<Device> {
                 }
             }
         }
-        let mounted = mounts
+        let mounted: Vec<String> = mounts
             .lines()
             .filter_map(|line| {
                 let parts: Vec<_> = line.split_whitespace().collect();
-                (parts.len() > 5 && numbers.iter().any(|n| n == parts[2]))
-                    .then(|| parts[4].replace("\\040", " "))
+                (parts.len() > 5 && numbers.iter().any(|n| n == parts[2])).then(|| {
+                    parts[4]
+                        .replace("\\040", " ")
+                        .replace("\\011", "\t")
+                        .replace("\\012", "\n")
+                        .replace("\\134", "\\")
+                })
             })
             .collect();
         found.push(Device {
             path: devices.join(entry.file_name()),
             sys_path: sys.clone(),
             connection_key: key,
+            serial_key: (!serial.is_empty()).then(|| hash(serial.as_bytes())),
             capacity: get(sys.join("size"))
                 .parse::<u64>()
                 .unwrap_or(0)
                 .saturating_mul(512),
+            mounted_storage: mounted
+                .iter()
+                .filter_map(|p| filesystem_storage(Path::new(p)))
+                .collect(),
             mounts: mounted,
         });
     }
     found.sort_by(|a, b| a.path.cmp(&b.path));
     found
+}
+
+/// Passive filesystem statistics; this never opens the SCSI/PTP interface.
+#[allow(clippy::unnecessary_cast)] // statvfs integer widths vary by Linux target.
+fn filesystem_storage(path: &Path) -> Option<Storage> {
+    let name = CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: the path is NUL terminated and the output buffer has the required
+    // layout. Only a successful statvfs call permits reading the initialized data.
+    if unsafe { libc::statvfs(name.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: statvfs succeeded and initialized the whole output structure.
+    let stats = unsafe { stats.assume_init() };
+    let block_size = stats.f_frsize as u64;
+    Some(Storage {
+        label: "Mounted camera storage".into(),
+        capacity: (stats.f_blocks as u64).saturating_mul(block_size),
+        free: (stats.f_bavail as u64).saturating_mul(block_size),
+        writable: stats.f_flag & libc::ST_RDONLY == 0,
+    })
+}
+
+/// Identify the USB attachment, rather than a SCSI disk which can disappear
+/// briefly when a vendor session changes modes. Also works with the last known
+/// disk path while that disk is absent, as its USB ancestor can remain present.
+pub fn connection_identity(device: &Device) -> Option<String> {
+    let usb = device
+        .sys_path
+        .ancestors()
+        .find(|p| p.join("idVendor").is_file())?;
+    let read = |name| {
+        fs::read_to_string(usb.join(name))
+            .ok()
+            .map(|s| s.trim().to_owned())
+    };
+    if read("idVendor")? != "07b4" || read("idProduct")? != "012d" {
+        return None;
+    }
+    Some(format!(
+        "{}:{}:{}",
+        device.connection_key,
+        read("busnum")?,
+        read("devnum")?
+    ))
+}
+
+fn ensure_storage_unmounted(device: &Device) -> Result<()> {
+    if !device.mounts.is_empty() {
+        return Err(StorageMounted.into());
+    }
+    Ok(())
 }
 
 pub trait Transport {
@@ -152,10 +233,14 @@ pub struct LinuxTransport {
 }
 impl LinuxTransport {
     pub fn open(device: &Device, _write: bool) -> Result<Self> {
-        let identity = discover()
+        ensure_storage_unmounted(device)?;
+        let identity = discover_checked()?
             .into_iter()
             .find(|d| d.path == device.path)
             .context("Camera disconnected")?;
+        // Recheck the current kernel mount table rather than trusting a scan
+        // taken earlier by the worker. No vendor command has been issued yet.
+        ensure_storage_unmounted(&identity)?;
         ensure!(
             identity.sys_path == device.sys_path
                 && identity.connection_key == device.connection_key,
@@ -628,12 +713,6 @@ fn info<T: Transport>(session: &mut Session<T>, device: &Device) -> Result<Camer
         &session.operation(0x1001, &[], true, None)?,
         &device.connection_key,
     )?;
-    let gps_chip = word(&session.operation(0x9126, &[], true, None)?)?;
-    let transfer_limit = word(&session.operation(0x9127, &[], true, None)?)?;
-    ensure!(
-        gps_chip == 1 && (1..=131072).contains(&transfer_limit),
-        "Unexpected GPS chip or transfer limit"
-    );
     let battery = if id.operations.contains(&0x1015) && id.properties.contains(&0x5001) {
         match session.operation(0x1015, &[0x5001], true, None) {
             Ok(raw) if raw.len() == 1 && raw[0] <= 100 => Some(raw[0]),
@@ -649,6 +728,14 @@ fn info<T: Transport>(session: &mut Session<T>, device: &Device) -> Result<Camer
     } else {
         Vec::new()
     };
+    // Finish identity, battery and SD card checks before issuing any
+    // GPS-specific commands. A failed general check cannot reach an upload.
+    let gps_chip = word(&session.operation(0x9126, &[], true, None)?)?;
+    let transfer_limit = word(&session.operation(0x9127, &[], true, None)?)?;
+    ensure!(
+        gps_chip == 1 && (1..=131072).contains(&transfer_limit),
+        "Unexpected GPS chip or transfer limit"
+    );
     Ok(CameraInfo {
         key: id.key,
         firmware: id.firmware,
@@ -688,20 +775,48 @@ fn close_session<T: Transport, R>(session: &mut Session<T>, result: Result<R>) -
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum UploadOutcome {
+    Committed,
+    AlreadyCurrent,
+}
+
 pub fn upload(
     device: &Device,
     data: &[u8],
-    mut progress: impl FnMut(Phase),
-    mut authorize: impl FnMut() -> Result<()>,
-    mut commit: impl FnMut(&CameraInfo) -> Result<()>,
-) -> Result<()> {
-    progress(Phase::Checking);
+    progress: impl FnMut(Phase),
+    authorize: impl FnMut(&CameraInfo) -> Result<bool>,
+    commit: impl FnMut(&CameraInfo) -> Result<()>,
+) -> Result<UploadOutcome> {
     let mut session = Session::new(LinuxTransport::open(device, true)?);
+    upload_session(
+        &mut session,
+        device,
+        data,
+        progress,
+        authorize,
+        commit,
+        thread::sleep,
+    )
+}
+
+fn upload_session<T: Transport>(
+    session: &mut Session<T>,
+    device: &Device,
+    data: &[u8],
+    mut progress: impl FnMut(Phase),
+    mut authorize: impl FnMut(&CameraInfo) -> Result<bool>,
+    mut commit: impl FnMut(&CameraInfo) -> Result<()>,
+    sleep: impl Fn(Duration),
+) -> Result<UploadOutcome> {
+    progress(Phase::Checking);
     session.inquiry()?;
     session.operation(0x1002, &[1], false, None)?;
     let result = (|| {
-        let camera = info(&mut session, device)?;
-        authorize()?;
+        let camera = info(session, device)?;
+        if !authorize(&camera)? {
+            return Ok(UploadOutcome::AlreadyCurrent);
+        }
         progress(Phase::Transferring {
             sent: 0,
             total: data.len(),
@@ -711,15 +826,104 @@ pub fn upload(
             camera.transfer_limit,
             &mut progress,
             || commit(&camera),
-            thread::sleep,
-        )
+            sleep,
+        )?;
+        Ok(UploadOutcome::Committed)
     })();
     progress(Phase::Closing);
-    close_session(&mut session, result)
+    close_session(session, result)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mounted_storage_blocks_probe_and_upload_before_opening_transport() {
+        let mut device = fake_device();
+        device.mounts = vec!["/media/camera".into()];
+        let error = probe(&device).unwrap_err();
+        assert!(error.to_string().contains("Unmount camera storage"));
+        assert!(storage_in_use(&error.context("initial check")));
+        let error = upload(
+            &device,
+            &[0; 130720],
+            |_| {},
+            |_| panic!("must not reach authorization"),
+            |_| panic!("must not commit"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Unmount camera storage"));
+        assert!(storage_in_use(&error));
+        assert!(!requires_reconnect(&error));
+    }
+    #[test]
+    fn usb_attachment_identity_survives_disk_rebinding_but_changes_on_reconnection() {
+        let temp = crate::test_support::Temp::new();
+        let usb = temp.path().join("usb-device");
+        let mut device = fake_device();
+        device.sys_path = usb.join("host1/target/disk/block/sda");
+        fs::create_dir_all(&device.sys_path).unwrap();
+        for (name, value) in [
+            ("idVendor", "07b4"),
+            ("idProduct", "012d"),
+            ("busnum", "1"),
+            ("devnum", "4"),
+        ] {
+            fs::write(usb.join(name), value).unwrap();
+        }
+        let original = connection_identity(&device).unwrap();
+        fs::remove_dir_all(usb.join("host1")).unwrap();
+        assert_eq!(connection_identity(&device).unwrap(), original);
+        device.sys_path = usb.join("host2/target/disk/block/sdb");
+        assert_eq!(connection_identity(&device).unwrap(), original);
+        fs::write(usb.join("devnum"), "5").unwrap();
+        assert_ne!(connection_identity(&device).unwrap(), original);
+        fs::remove_file(usb.join("idVendor")).unwrap();
+        assert!(connection_identity(&device).is_none());
+    }
+    #[test]
+    fn mounted_volume_space_comes_from_the_filesystem_without_camera_queries() {
+        let temp = crate::test_support::Temp::new();
+        let storage = filesystem_storage(temp.path()).unwrap();
+        assert!(storage.capacity > 0 && storage.free <= storage.capacity);
+        assert!(storage.writable);
+        assert!(filesystem_storage(&temp.path().join("absent")).is_none());
+    }
+
+    #[test]
+    fn discovery_recognizes_partition_mounts_and_escaped_mount_paths() {
+        use std::os::unix::fs::symlink;
+        let temp = crate::test_support::Temp::new();
+        let usb = temp.path().join("usb");
+        let disk = usb.join("host/target/block/sda");
+        let root = temp.path().join("class-block");
+        fs::create_dir_all(disk.join("device")).unwrap();
+        fs::create_dir_all(disk.join("sda1")).unwrap();
+        fs::create_dir_all(&root).unwrap();
+        for (path, value) in [
+            (usb.join("idVendor"), "07b4"),
+            (usb.join("idProduct"), "012d"),
+            (disk.join("device/vendor"), "OLYMPUS"),
+            (disk.join("device/model"), "TG-1"),
+            (disk.join("dev"), "8:0"),
+            (disk.join("sda1/dev"), "8:1"),
+            (disk.join("sda1/partition"), "1"),
+        ] {
+            fs::write(path, value).unwrap();
+        }
+        symlink(&disk, root.join("sda")).unwrap();
+        symlink(disk.join("sda1"), root.join("sda1")).unwrap();
+        let found = discover_at(
+            &root,
+            Path::new("/dev"),
+            r"22 1 8:1 / /media/camera\040card rw - vfat /dev/sda1 rw",
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].mounts, ["/media/camera card"]);
+        assert!(storage_in_use(
+            &ensure_storage_unmounted(&found[0]).unwrap_err()
+        ));
+    }
+
     use super::*;
     #[derive(Default)]
     struct Fake {
@@ -730,7 +934,31 @@ mod tests {
         reject_commit: bool,
         fail_response_for: Option<u16>,
         reject_response_for: Option<u16>,
+        device_info: Option<Vec<u8>>,
         body: Vec<u8>,
+    }
+    impl Fake {
+        fn payload(&self) -> Vec<u8> {
+            if let Some(dataset) = &self.device_info {
+                match self.command.unwrap().0 {
+                    0x1001 => return dataset.clone(),
+                    0x9126 => return 1u32.to_le_bytes().to_vec(),
+                    0x9127 => return 131072u32.to_le_bytes().to_vec(),
+                    0x1015 => return vec![84],
+                    0x1004 => return [1u32.to_le_bytes(), 1u32.to_le_bytes()].concat(),
+                    0x1005 => {
+                        let mut raw = vec![0; 6];
+                        raw.extend(32_000_000_000u64.to_le_bytes());
+                        raw.extend(28_000_000_000u64.to_le_bytes());
+                        raw.extend(0u32.to_le_bytes());
+                        raw.extend([0, 0]); // Empty description and label.
+                        return raw;
+                    }
+                    _ => (),
+                }
+            }
+            self.state.to_le_bytes().to_vec()
+        }
     }
     impl Transport for Fake {
         fn transfer(
@@ -762,12 +990,13 @@ mod tests {
                 }
                 0xc4 => {
                     let mut raw = vec![0; 64];
-                    raw[12..16].copy_from_slice(&16u32.to_le_bytes());
+                    raw[12..16]
+                        .copy_from_slice(&((12 + self.payload().len()) as u32).to_le_bytes());
                     Ok(raw)
                 }
                 0xc2 => {
                     let (code, txn) = self.command.unwrap();
-                    Ok(container(2, code, txn, &self.state.to_le_bytes()))
+                    Ok(container(2, code, txn, &self.payload()))
                 }
                 0xc3 => {
                     let (code, txn) = self.command.unwrap();
@@ -798,7 +1027,146 @@ mod tests {
             connection_key: "fake-camera".into(),
             capacity: 0,
             mounts: vec![],
+            ..Default::default()
         }
+    }
+
+    fn fake_identity() -> Vec<u8> {
+        fake_identity_with_telemetry(false)
+    }
+    fn fake_identity_with_telemetry(telemetry: bool) -> Vec<u8> {
+        let mut raw = vec![0; 8];
+        raw.push(0); // Empty extension description.
+        raw.extend(0u16.to_le_bytes());
+        let mut operations = REQUIRED.to_vec();
+        if telemetry {
+            operations.extend([0x1015, 0x1004, 0x1005]);
+        }
+        raw.extend((operations.len() as u32).to_le_bytes());
+        for code in operations {
+            raw.extend(code.to_le_bytes());
+        }
+        raw.extend(0u32.to_le_bytes()); // Events.
+        raw.extend(u32::from(telemetry).to_le_bytes());
+        if telemetry {
+            raw.extend(0x5001u16.to_le_bytes());
+        }
+        for _ in 0..2 {
+            raw.extend(0u32.to_le_bytes());
+        }
+        for value in ["OLYMPUS", "TG-1", "1.00", "camera-a"] {
+            let chars: Vec<_> = value.encode_utf16().collect();
+            raw.push((chars.len() + 1) as u8);
+            for c in chars {
+                raw.extend(c.to_le_bytes());
+            }
+            raw.extend(0u16.to_le_bytes());
+        }
+        raw
+    }
+
+    #[test]
+    fn initial_camera_information_and_upload_share_one_session() {
+        let mut session = Session::new(Fake {
+            device_info: Some(fake_identity_with_telemetry(true)),
+            state: 2,
+            ..Default::default()
+        });
+        let data = vec![42; 130720];
+        let mut recorded = false;
+        let result = upload_session(
+            &mut session,
+            &fake_device(),
+            &data,
+            |_| (),
+            |info| {
+                assert_eq!(info.firmware, "1.00");
+                assert_eq!(info.gps_chip, 1);
+                assert_eq!(info.battery, Some(84));
+                assert_eq!(info.storage[0].capacity, 32_000_000_000);
+                Ok(true)
+            },
+            |_| {
+                recorded = true;
+                Ok(())
+            },
+            |_| (),
+        )
+        .unwrap();
+        assert_eq!(result, UploadOutcome::Committed);
+        assert!(recorded && session.committed && session.idle);
+        assert_eq!(
+            session.io.codes,
+            [
+                0x1002, 0x1001, 0x1015, 0x1004, 0x1005, 0x9126, 0x9127, 0x9128, 0x9129, 0x9129,
+                0x9129, 0x912a, 0x912b, 0x912c, 0x1003
+            ]
+        );
+        assert_eq!(session.io.body, data);
+    }
+
+    #[test]
+    fn failed_storage_check_closes_session_without_any_gps_commands() {
+        let mut session = Session::new(Fake {
+            device_info: Some(fake_identity_with_telemetry(true)),
+            reject_response_for: Some(0x1005),
+            ..Default::default()
+        });
+        let result = upload_session(
+            &mut session,
+            &fake_device(),
+            &[0; 130720],
+            |_| (),
+            |_| panic!("failed checks cannot authorize GPS updates"),
+            |_| panic!("failed checks cannot commit GPS data"),
+            |_| (),
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            session.io.codes,
+            [0x1002, 0x1001, 0x1015, 0x1004, 0x1005, 0x1003]
+        );
+        assert!(session.idle && session.io.body.is_empty());
+    }
+
+    #[test]
+    fn matching_camera_receipt_skips_transfer_and_closes_session() {
+        let mut session = Session::new(Fake {
+            device_info: Some(fake_identity()),
+            ..Default::default()
+        });
+        let result = upload_session(
+            &mut session,
+            &fake_device(),
+            &[0; 130720],
+            |_| (),
+            |_| Ok(false),
+            |_| panic!("must not commit matching predictions"),
+            |_| (),
+        )
+        .unwrap();
+        assert_eq!(result, UploadOutcome::AlreadyCurrent);
+        assert_eq!(session.io.codes, [0x1002, 0x1001, 0x9126, 0x9127, 0x1003]);
+        assert!(session.io.body.is_empty() && session.idle && !session.committed);
+    }
+
+    #[test]
+    fn telemetry_refresh_reads_health_and_storage_without_writing_assistance() {
+        let mut session = Session::new(Fake {
+            device_info: Some(fake_identity_with_telemetry(true)),
+            ..Default::default()
+        });
+        let info = probe_session(&mut session, &fake_device()).unwrap();
+        assert_eq!(info.battery, Some(84));
+        assert_eq!(info.storage[0].capacity, 32_000_000_000);
+        assert!(info.read_at.is_some());
+        assert_eq!(
+            session.io.codes,
+            [
+                0x1002, 0x1001, 0x1015, 0x1004, 0x1005, 0x9126, 0x9127, 0x1003
+            ]
+        );
+        assert!(session.io.body.is_empty() && session.idle && !session.committed);
     }
 
     #[test]

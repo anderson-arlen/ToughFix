@@ -75,7 +75,7 @@ pub fn should_exit(
     absent_seconds: u64,
     seen_camera: bool,
 ) -> bool {
-    hotplug
+    (hotplug || seen_camera)
         && !visible
         && !busy
         && !refreshing
@@ -120,5 +120,8 @@ mod tests {
         assert!(!should_exit(true, false, false, true, 60, false));
         assert!(!should_exit(false, false, false, false, 60, false));
         assert!(should_exit(true, false, false, false, 5, true));
+        assert!(should_exit(false, false, false, false, 5, true));
+        assert!(!should_exit(false, true, false, false, 60, true));
+        assert!(!should_exit(false, false, true, false, 60, true));
     }
 }

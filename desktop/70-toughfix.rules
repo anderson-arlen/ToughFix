@@ -1,4 +1,7 @@
 # Olympus TG-1 whole camera disk only; access for the active local desktop seat.
+# Hold desktop automount until the connection-time update finishes. The app (or
+# its service cleanup when disabled/failed) mounts storage through UDisks.
+SUBSYSTEM=="block", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="012d", ENV{UDISKS_AUTO}="0"
 SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="012d", TAG+="uaccess"
 SUBSYSTEM=="scsi_generic", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="012d", TAG+="uaccess"
 # Start only the desktop user's service, after the SG endpoint is available.

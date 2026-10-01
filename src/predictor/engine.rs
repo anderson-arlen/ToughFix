@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Transactional desktop pipeline: official sources → fit → decode → guard → publish.
 use super::{
-    Options, data, generate,
+    Options, Progress, RefreshStage, data, generate,
     health::{self, Snapshot},
     sources::Sources,
     validation,
@@ -55,7 +55,7 @@ fn lock(path: &Path) -> Result<File> {
     );
     Ok(file)
 }
-pub fn refresh(state: &Path, offline: bool, progress: impl Fn(String) + Sync) -> Result<Value> {
+pub fn refresh(state: &Path, offline: bool, progress: impl Fn(Progress) + Sync) -> Result<Value> {
     let root = root(state);
     let _lock = lock(&root)?;
     let result = (|| {
@@ -108,7 +108,7 @@ pub(super) fn publish(
     state: &Path,
     snapshot: &Snapshot,
     now: f64,
-    progress: &(impl Fn(String) + Sync),
+    progress: &(impl Fn(Progress) + Sync),
 ) -> Result<Value> {
     let failures = snapshot.failures(now);
     ensure!(failures.is_empty(), "{}", failures.join("; "));
@@ -122,7 +122,10 @@ pub(super) fn publish(
         p["input_fingerprint"].as_str() == Some(&fingerprint) && p["engine_version"] == 1
     });
     let (bytes, metrics) = if let Some(p) = reusable {
-        progress("Reusing predictions for the latest observed arc".into());
+        progress(Progress::new(
+            RefreshStage::Validating,
+            "No newer orbital inputs; checking existing predictions",
+        ));
         (archive(state, p)?, p["metrics"].clone())
     } else {
         let scratch = root.join("generation");
@@ -154,6 +157,10 @@ pub(super) fn publish(
             .or_else(|| metrics["training_start_gps"].as_str())
             .context("Missing training epoch")?,
     )?;
+    progress(Progress::new(
+        RefreshStage::Validating,
+        "Checking satellite safety and the assistance file",
+    ));
     let (guarded, mut guard) = health::guard(&bytes, training, snapshot, now)?;
     let validation = validation::validate(&guarded)?;
     let hash = crate::camera::hash(&guarded);
@@ -172,11 +179,14 @@ pub(super) fn publish(
     let pointer = json!({"engine_version":1,"archive":archive_name,"input_fingerprint":fingerprint,"metrics":metrics,"guard":guard});
     // The single atomic pointer publishes the bytes and both reports together.
     files::json(&root.join("current.json"), &pointer)?;
-    progress(if pointer["guard"]["upload_allowed"] == true {
-        "Validated predictions are ready".into()
-    } else {
-        "Predictions published, but satellite health blocks uploading".into()
-    });
+    progress(Progress::new(
+        RefreshStage::Validating,
+        if pointer["guard"]["upload_allowed"] == true {
+            "Validated predictions are ready"
+        } else {
+            "Predictions published, but satellite health blocks uploading"
+        },
+    ));
     Ok(pointer)
 }
 

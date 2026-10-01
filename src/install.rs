@@ -72,7 +72,7 @@ fn launcher(binary: &Path, config: &Path) -> Result<Vec<u8>> {
     Ok(format!("[Desktop Entry]\nType=Application\nName=ToughFix\nComment=Olympus TG-1 GPS assistance and camera status\nExec=/usr/bin/env -- {} --config-dir {}\nIcon=toughfix\nTerminal=false\nCategories=Utility;\nStartupNotify=true\nDBusActivatable=false\n",desktop_arg(binary)?,desktop_arg(config)?).into_bytes())
 }
 fn service(binary: &Path, config: &Path) -> Result<Vec<u8>> {
-    Ok(format!("[Unit]\nDescription=ToughFix camera connection\nRequisite=graphical-session.target\nAfter=graphical-session.target\nPartOf=graphical-session.target\nConditionUser=!root\nConditionEnvironment=|DISPLAY\nConditionEnvironment=|WAYLAND_DISPLAY\n\n[Service]\nType=exec\nExecCondition=/usr/bin/test ! -e {}\nExecStart=/usr/bin/env -- {} --config-dir {} --background --hotplug\nRestart=no\n",service_arg(&config.join("toughfix/camera-start-disabled"))?,service_arg(binary)?,service_arg(config)?).into_bytes())
+    Ok(format!("[Unit]\nDescription=ToughFix camera connection\nRequisite=graphical-session.target\nAfter=graphical-session.target\nPartOf=graphical-session.target\nConditionUser=!root\nConditionEnvironment=|DISPLAY\nConditionEnvironment=|WAYLAND_DISPLAY\n\n[Service]\nType=exec\nExecCondition=/usr/bin/test ! -e {}\nExecStart=/usr/bin/env -- {} --config-dir {} --background --hotplug\nExecStopPost=-/usr/bin/env -- {} storage-release\nRestart=no\n",service_arg(&config.join("toughfix/camera-start-disabled"))?,service_arg(binary)?,service_arg(config)?,service_arg(binary)?).into_bytes())
 }
 fn run(args: &[String], privileged: bool) -> Result<()> {
     let mut cmd = if privileged && unsafe { libc::geteuid() } != 0 {
@@ -313,6 +313,15 @@ mod tests {
         let service =
             fs::read_to_string(stage.join("etc/xdg/systemd/user/toughfix-camera.service")).unwrap();
         assert!(service.contains("--background --hotplug"));
+        assert!(
+            service.contains("ExecStopPost=-/usr/bin/env -- \"/usr/bin/toughfix\" storage-release")
+        );
+        assert!(service.contains("ExecCondition="));
+        assert!(
+            std::str::from_utf8(RULE_BYTES)
+                .unwrap()
+                .contains("ENV{UDISKS_AUTO}=\"0\"")
+        );
         assert!(!service.contains("--project"));
         assert!(!service.contains("[Install]"));
     }

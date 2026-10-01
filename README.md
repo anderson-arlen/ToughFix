@@ -8,6 +8,8 @@ in. A window and system tray show camera status, prediction freshness, and
 upload progress. The app and installer are written in Rust; neither Olympus's
 updater nor any outside prediction service is needed.
 
+![ToughFix dashboard showing camera status and GPS assistance](docs/screenshot.png)
+
 ## Why this exists
 
 A used TG-1 still takes pictures just fine. Its GPS also works, but it asks for
@@ -28,9 +30,9 @@ the camera's normal GPS operation.
 
 ## Install and use
 
-You need Linux, Rust 1.92 or newer, a C toolchain, `pkg-config`, and GTK 4
-development packages. On Arch Linux the build prerequisites are `rust`,
-`base-devel`, `pkgconf`, and `gtk4`. Automatic camera launch also needs systemd
+You need Linux, Rust 1.92 or newer, a C toolchain, `pkg-config`, and development
+packages for GTK 4 and Libadwaita 1.4 or newer. On Arch Linux the build prerequisites
+are `rust`, `base-devel`, `pkgconf`, `gtk4`, and `libadwaita`. Automatic camera launch also needs systemd
 and an active graphical session. The tray uses StatusNotifierItem, supported
 by desktops such as KDE and by Waybar configurations with a tray.
 
@@ -49,26 +51,64 @@ app updates do not require sudo once that setup is in place.
 
 1. Reconnect the camera after installation and choose **USB Storage** mode.
 2. ToughFix starts in the background, refreshes its inputs, and automatically
-   uploads a changed eligible forecast. You can also launch it from the
+   uploads a changed eligible forecast. If the desktop has already mounted the
+   card, ToughFix briefly unmounts it for this initial check/update, then mounts
+   it again, ready for browsing and copying photos.
+   You can also launch it from the
    application menu and open its dashboard from the tray.
 3. Wait for the camera operation to finish. **An amber tray icon means do not
    unplug.** Eject any mounted camera storage before disconnecting.
 
 The tray exists only while a camera is connected. Clicking it opens the window;
-its menu offers Open and Quit. The dashboard shows camera communication status,
+its menu offers Open and Quit. After the initial check, automatic camera commands
+stop for the rest of that USB connection, so browsing and copying photos can
+continue uninterrupted. Mounted
+storage statistics come from Linux filesystem information. Camera health and
+battery readings are timestamped snapshots from a camera session. A forecast
+matching that camera's last acknowledged commit skips the upload. Identical
+USB and PTP serial numbers also identify older upload records. One health and
+battery reading happens before storage mounts; no periodic camera polling
+occurs while browsing. Timestamped snapshots are saved for the next launch. The dashboard shows camera communication status,
 reported battery level, storage and mounts, observation source and age,
 prediction coverage and statistics, upload progress, and the last acknowledged
 commit associated with that camera.
+Live activity and progress stay pinned above the scrolling content. The main
+view shows the camera, its health and SD card capacity, and a GPS assistance
+summary. A battery-shaped gauge colors the reported level green, amber, or
+red; its bolt indicates USB connection, not a verified charging state. An SD
+card graphic shows capacity alongside a storage-use bar and free space.
+Snapshot age appears beside health and beneath the battery gauge. The camera
+refresh icon reads new battery, health and SD-card information on request,
+briefly unmounting and remounting the card. A busy card is left alone, and this
+refresh does not upload GPS predictions.
+**Camera**, **Advanced**, and **Settings** are tabs in the same window, with preferences,
+observation ages, model statistics, hashes, upload history, and diagnostics.
+Native Libadwaita navigation appears in the header, moving to a bottom bar in
+narrow windows. Status and progress remain visible on every view.
+The main window defaults to a compact floating window on Hyprland; other
+desktops use their normal placement policy. Download stages show animated progress; orbit
+calculation reports completed satellites, and uploads report transferred bytes.
 
 **Settings → Start when camera connects** controls automatic launching.
 **Update automatically when connected** controls uploads. Both are enabled
-by default. There is no login autostart requirement. A hidden camera-triggered
-instance exits after disconnection; an open dashboard stays available.
+by default. There is no login autostart requirement. Closing the window hides it while connected and quits when no camera is
+connected. Hidden instances exit after disconnection; an open dashboard stays available.
+The TG-1-specific udev rule holds desktop automount while the initial update
+runs; ToughFix then mounts the card through UDisks2. Failed refreshes release
+the hold, and a 90-second initial wait limit releases it if downloads or prediction
+generation take too long. Startup disabled or an app failure also releases storage
+through service cleanup. This requires UDisks2. If an automounter ignores the
+hint, ToughFix requests one normal unmount at startup. A busy card cancels that
+connection's initial check; no forced unmount or periodic retry occurs. A card
+mounted again after preparation is also left alone until the next connection.
 
 Inputs refresh at startup and hourly while the app is running; failures retry
 after five minutes. A new full forecast took **about 40 seconds** with four
 workers on a Threadripper 2950X, excluding downloads. Unchanged inputs reuse
-the forecast. No Python, virtual environment, or source checkout is needed
+the forecast. Each USB connection permits one automatic upload; further updates
+during a long connection use the upload button after unmounting storage.
+**Refresh satellite data** refreshes predictions without repeating camera status
+queries. No Python, virtual environment, or source checkout is needed
 by the installed application.
 
 For custom paths, installation without system setup, or desktops with a different

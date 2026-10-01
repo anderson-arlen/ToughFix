@@ -29,7 +29,9 @@ impl ksni::Tray for Tray {
     }
     fn status(&self) -> ksni::Status {
         if self.state.phase.device_busy()
+            || self.state.storage_preparing
             || self.state.camera_error.is_some()
+            || self.state.storage_error.is_some()
             || self.state.reconnect_required
         {
             ksni::Status::NeedsAttention
@@ -97,32 +99,42 @@ impl ksni::Tray for Tray {
 }
 
 fn icon(state: &State) -> ksni::Icon {
-    let color = if state.phase.device_busy() {
+    let color = if state.phase.device_busy() || state.storage_preparing {
         [249, 181, 71]
     } else if state.camera_error.is_some()
+        || state.storage_error.is_some()
         || state.reconnect_required
         || state.phase == Phase::Failed
     {
         [243, 102, 110]
     } else {
-        [65, 207, 165]
+        [101, 213, 187] // Application icon's crosshair green (#65d5bb).
     };
     let mut pixels = Vec::with_capacity(32 * 32 * 4);
-    for y in 0..32i32 {
-        for x in 0..32i32 {
-            let dx = x - 16;
-            let dy = y - 16;
-            let circle = dx * dx + dy * dy < 225;
-            let cross = (dx.abs() <= 1 && dy.abs() < 10) || (dy.abs() <= 1 && dx.abs() < 10);
-            let lens = dx * dx + dy * dy < 30;
-            let ring = (dx * dx + dy * dy > 105) && (dx * dx + dy * dy < 135);
-            if circle && (cross || lens || ring) {
-                pixels.extend([255, 15, 29, 34]);
-            } else if circle {
-                pixels.extend([255, color[0], color[1], color[2]]);
-            } else {
-                pixels.extend([0, 0, 0, 0]);
+    // Match the application's ring and four rounded arms, with a transparent
+    // center/background so the silhouette stays clear on any panel theme.
+    // Supersampling smooths the small circle without requiring a GUI renderer.
+    for y in 0..32 {
+        for x in 0..32 {
+            let mut covered = 0;
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let dx = (x as f64 + (sx as f64 + 0.5) / 4. - 16.).abs();
+                    let dy = (y as f64 + (sy as f64 + 0.5) / 4. - 16.).abs();
+                    let ring = (dx.hypot(dy) - 9.).abs() <= 1.;
+                    let horizontal = (dx - dx.clamp(5., 12.)).hypot(dy) <= 1.;
+                    let vertical = dx.hypot(dy - dy.clamp(5., 12.)) <= 1.;
+                    if ring || horizontal || vertical {
+                        covered += 1;
+                    }
+                }
             }
+            let alpha = (covered * 255 / 16) as u8;
+            pixels.extend(if alpha == 0 {
+                [0, 0, 0, 0]
+            } else {
+                [alpha, color[0], color[1], color[2]]
+            });
         }
     }
     ksni::Icon {
@@ -134,15 +146,45 @@ fn icon(state: &State) -> ksni::Icon {
 
 pub struct Manager {
     handle: Option<Handle<Tray>>,
-    signature: String,
+    signature: Option<UpdateKey>,
     retry_at: std::time::Instant,
     pub error: Option<String>,
+}
+
+/// Every state input used by the tray's icon, title, tooltip or menu must
+/// invalidate its cached snapshot, even when the upload phase stays Idle.
+#[derive(Debug, PartialEq)]
+struct UpdateKey {
+    phase: Phase,
+    storage_preparing: bool,
+    storage_error: bool,
+    camera_error: bool,
+    reconnect_required: bool,
+    storage_mounted: bool,
+    updating_sources: bool,
+    quit_pending: bool,
+    demo: bool,
+}
+impl From<&State> for UpdateKey {
+    fn from(state: &State) -> Self {
+        Self {
+            phase: state.phase.clone(),
+            storage_preparing: state.storage_preparing,
+            storage_error: state.storage_error.is_some(),
+            camera_error: state.camera_error.is_some(),
+            reconnect_required: state.reconnect_required,
+            storage_mounted: state.storage_mounted(),
+            updating_sources: state.updating_sources,
+            quit_pending: state.quit_pending,
+            demo: state.demo,
+        }
+    }
 }
 impl Manager {
     pub fn new() -> Self {
         Self {
             handle: None,
-            signature: String::new(),
+            signature: None,
             retry_at: std::time::Instant::now() - std::time::Duration::from_secs(10),
             error: None,
         }
@@ -158,14 +200,14 @@ impl Manager {
             if let Some(h) = self.handle.take() {
                 h.shutdown().wait();
             }
-            self.signature.clear();
+            self.signature = None;
             self.error = None;
             self.retry_at = std::time::Instant::now() - std::time::Duration::from_secs(10);
             return;
         }
         if self.handle.as_ref().is_some_and(|h| h.is_closed()) {
             self.handle = None;
-            self.signature.clear();
+            self.signature = None;
         }
         if self.handle.is_none() && self.retry_at.elapsed() >= std::time::Duration::from_secs(10) {
             match (Tray {
@@ -187,19 +229,12 @@ impl Manager {
             }
             self.retry_at = std::time::Instant::now();
         }
-        let signature = format!(
-            "{:?}:{}:{}:{}:{}",
-            state.phase,
-            state.reconnect_required,
-            state.camera_error.is_some(),
-            state.updating_sources,
-            state.quit_pending
-        );
-        if signature != self.signature {
-            if let Some(handle) = self.handle.as_ref() {
-                handle.update(|t| t.state = state);
-            }
-            self.signature = signature;
+        let signature = UpdateKey::from(&state);
+        if self.signature.as_ref() != Some(&signature)
+            && let Some(handle) = self.handle.as_ref()
+        {
+            handle.update(|t| t.state = state);
+            self.signature = Some(signature);
         }
     }
 }
@@ -223,5 +258,10 @@ mod tests {
         });
         assert_eq!(idle.data.len(), 32 * 32 * 4);
         assert_ne!(idle.data, busy.data);
+        let preparing = icon(&State {
+            storage_preparing: true,
+            ..Default::default()
+        });
+        assert_eq!(preparing.data, busy.data);
     }
 }

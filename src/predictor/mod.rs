@@ -14,7 +14,51 @@ use data::{DAY, Frames, V3};
 use rayon::prelude::*;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{fs, path::PathBuf, time::Instant};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Instant,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefreshStage {
+    SatelliteHealth,
+    Observations,
+    ModelInputs,
+    Calculating,
+    Validating,
+}
+
+#[derive(Clone, Debug)]
+pub struct Progress {
+    pub stage: RefreshStage,
+    pub detail: String,
+    pub completed: Option<(usize, usize)>,
+}
+impl Progress {
+    pub fn new(stage: RefreshStage, detail: impl Into<String>) -> Self {
+        Self {
+            stage,
+            detail: detail.into(),
+            completed: None,
+        }
+    }
+    pub fn title(&self) -> &'static str {
+        match self.stage {
+            RefreshStage::SatelliteHealth => "Checking satellite health",
+            RefreshStage::Observations => "Looking up the latest GPS observations",
+            RefreshStage::ModelInputs => "Updating orbit calculation inputs",
+            RefreshStage::Calculating => "Calculating new GPS predictions",
+            RefreshStage::Validating => "Checking prediction data",
+        }
+    }
+}
+impl std::fmt::Display for Progress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
 
 pub struct Options {
     pub data_dir: PathBuf,
@@ -201,7 +245,11 @@ impl Prediction<'_> {
     }
 }
 
-pub fn generate(options: &Options, progress: impl Fn(String) + Sync) -> Result<Value> {
+pub fn generate(options: &Options, progress: impl Fn(Progress) + Sync) -> Result<Value> {
+    progress(Progress::new(
+        RefreshStage::Calculating,
+        "Preparing observed orbits and clock data",
+    ));
     let began = Instant::now();
     ensure!(
         options.threads > 0 && options.threads <= 32,
@@ -270,12 +318,16 @@ pub fn generate(options: &Options, progress: impl Fn(String) + Sync) -> Result<V
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(options.threads)
         .build()?;
-    progress(format!(
-        "Fitting {} satellites from {} through {} GPS",
-        wanted.len(),
-        data::calendar(start),
-        data::calendar(cutoff - 900.)
+    progress(Progress::new(
+        RefreshStage::Calculating,
+        format!(
+            "Fitting {} satellites from {} through {} GPS",
+            wanted.len(),
+            data::calendar(start),
+            data::calendar(cutoff - 900.)
+        ),
     ));
+    let completed = AtomicUsize::new(0);
     let prediction = Prediction {
         model: &model,
         frames: &frames,
@@ -298,7 +350,11 @@ pub fn generate(options: &Options, progress: impl Fn(String) + Sync) -> Result<V
                     ),
                     Err(e) => format!("disabled: {e:#}"),
                 };
-                progress(format!("G{prn:02}: {message}"));
+                progress(Progress {
+                    stage: RefreshStage::Calculating,
+                    detail: format!("G{prn:02}: {message}"),
+                    completed: Some((completed.fetch_add(1, Ordering::Relaxed) + 1, wanted.len())),
+                });
                 (prn, result)
             })
             .collect()
@@ -351,6 +407,10 @@ pub fn generate(options: &Options, progress: impl Fn(String) + Sync) -> Result<V
             .all(|week| week.iter().filter(|r| r[1] == 0).count() >= 4),
         "Fewer than four usable satellites in a prediction week; refusing empty assistance"
     );
+    progress(Progress::new(
+        RefreshStage::Validating,
+        "Encoding the two-week assistance file",
+    ));
     let archive = cep::archive(cutoff, &weeks)?;
     let hash = format!("{:x}", Sha256::digest(&archive));
     let sources: Vec<_> = observed.paths.iter().filter(|p| {

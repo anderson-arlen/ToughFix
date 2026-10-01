@@ -6,6 +6,7 @@ mod install;
 mod model;
 mod predictor;
 mod startup;
+mod storage;
 #[cfg(test)]
 mod test_support;
 mod tray;
@@ -25,6 +26,9 @@ fn main() {
     }
 }
 fn run() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("storage-release") {
+        return storage::fallback();
+    }
     if std::env::args().nth(1).as_deref() == Some("install") {
         return install::cli(std::env::args().skip(2));
     }
@@ -67,7 +71,7 @@ fn run() -> Result<()> {
             "--monitor-only" => monitor_only = true,
             "--help" | "-h" => {
                 println!(
-                    "ToughFix — Olympus TG-1 GPS assistance\n\npredict         Generate an offline CEP candidate (see predict --help)\nrefresh         Download, generate, validate and publish assistance; no camera access\naudit           Independent numerical trajectory check; no camera access\ninstall         Install/update the app (see install --help)\n--background    Start without opening a window\n--hotplug       Background camera session; exit when disconnected and window hidden\n--monitor-only  Disable network refresh and all uploads\n--demo          Simulated camera; no device access or network requests\n--project PATH  Optional legacy research-history import\n--state-dir PATH  Override app state directory\n--config-dir PATH  Override desktop preferences/service directory\n\nClosing the window keeps monitoring active while connected. Camera-triggered sessions exit when disconnected and hidden. Quit waits for an active camera operation."
+                    "ToughFix — Olympus TG-1 GPS assistance\n\npredict         Generate an offline CEP candidate (see predict --help)\nrefresh         Download, generate, validate and publish assistance; no camera access\naudit           Independent numerical trajectory check; no camera access\ninstall         Install/update the app (see install --help)\n--background    Start without opening a window\n--hotplug       Background camera session; exit when disconnected and window hidden\n--monitor-only  Disable network refresh and all uploads\n--demo          Simulated camera; no device access or network requests\n--project PATH  Optional legacy research-history import\n--state-dir PATH  Override app state directory\n--config-dir PATH  Override desktop preferences/service directory\n\nClosing the window hides it while connected and quits when no camera is connected. Hidden instances exit after disconnection. Quit waits for an active camera operation."
                 );
                 return Ok(());
             }

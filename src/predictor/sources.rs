@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{
-    data,
+    Progress, RefreshStage, data,
     health::{self, Notice, Snapshot},
     physics,
 };
@@ -151,7 +151,7 @@ impl Sources {
         self.manifest.insert(key.into(), m.clone());
         Ok(m)
     }
-    pub fn refresh(&mut self, progress: &(impl Fn(String) + Sync)) -> Result<Snapshot> {
+    pub fn refresh(&mut self, progress: &(impl Fn(Progress) + Sync)) -> Result<Snapshot> {
         let previous: Option<Snapshot> = fs::read(self.root.join("health-state.json"))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok());
@@ -189,10 +189,13 @@ impl Sources {
     fn refresh_inner(
         &mut self,
         previous: Option<&Snapshot>,
-        progress: &(impl Fn(String) + Sync),
+        progress: &(impl Fn(Progress) + Sync),
     ) -> Result<Snapshot> {
         let checked = health::now()?;
-        progress("Checking Coast Guard satellite notices".into());
+        progress(Progress::new(
+            RefreshStage::SatelliteHealth,
+            "Checking official satellite notices",
+        ));
         let latest = self.required(
             "current_nanu",
             &format!("{NAVCEN}nanu/current_nanu.nnu"),
@@ -303,10 +306,16 @@ impl Sources {
             if let Some(e) = error {
                 return Err(e);
             }
-            progress(format!("Checked {} satellite notices", seen.len()));
+            progress(Progress::new(
+                RefreshStage::SatelliteHealth,
+                format!("Checked {} satellite notices", seen.len()),
+            ));
         }
         health::resolve(&notices, checked)?;
-        progress("Downloading NOAA observed GPS orbits".into());
+        progress(Progress::new(
+            RefreshStage::Observations,
+            "Downloading observed GPS orbits from NOAA / IGS",
+        ));
         let today = Utc::now().date_naive();
         let jobs: Vec<_> = (0..7)
             .map(|offset| {
@@ -330,6 +339,10 @@ impl Sources {
                 self.manifest.insert(m.file.clone(), m);
             }
         }
+        progress(Progress::new(
+            RefreshStage::Observations,
+            "Looking for newer observed Ultra-rapid data",
+        ));
         let mut ultra = Vec::new();
         for offset in 0..3 {
             let d = today - Days::days(offset);
@@ -359,7 +372,10 @@ impl Sources {
                 self.required(&file, &format!("{NOAA}{key}"), &file)?;
             }
         }
-        progress("Refreshing Earth orientation and gravity inputs".into());
+        progress(Progress::new(
+            RefreshStage::ModelInputs,
+            "Refreshing Earth orientation and gravity inputs",
+        ));
         if self
             .cached("earth_orientation", 86400., checked)
             .filter(|m| m.file == "finals2000A.all")
@@ -392,7 +408,10 @@ impl Sources {
             .context("No recent observed GPS orbit samples")?
             .time;
         let frames = data::Frames::read(&self.root.join("finals2000A.all"))?;
-        progress("Checking observed orbit discontinuities".into());
+        progress(Progress::new(
+            RefreshStage::SatelliteHealth,
+            "Checking observations for satellite maneuvers",
+        ));
         let events = health::detect(&samples, &frames, checked)?;
         let mut by_prn = BTreeMap::new();
         for s in &samples {
