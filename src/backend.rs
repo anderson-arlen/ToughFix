@@ -68,9 +68,9 @@ impl CameraActivity {
             || self.storage_released
             || self.preparation_attempted
             || self.initial_expired(now)
-            || !self
+            || self
                 .connected_at
-                .is_some_and(|at| now.duration_since(at) >= Duration::from_secs(3))
+                .is_none_or(|at| now.duration_since(at) < Duration::from_secs(3))
         {
             return false;
         }
@@ -101,13 +101,10 @@ impl CameraActivity {
     }
     fn should_release(&self, now: Instant, state: &State) -> bool {
         self.automatic_attempted
-            || (state.automatic
-                && !state.updating_sources
-                && state.data.upload_allowed
-                && state.matches_latest()
-                && self.probe_attempted)
-            || (!state.automatic && self.probe_attempted)
-            || (!state.updating_sources && !state.data.upload_allowed && self.probe_attempted)
+            || (self.probe_attempted
+                && (!state.automatic
+                    || (!state.updating_sources
+                        && (!state.data.upload_allowed || state.matches_latest()))))
             || self.initial_expired(now)
             || state.multiple_cameras
             || state.reconnect_required

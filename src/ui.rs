@@ -363,12 +363,10 @@ fn render(f: &Fields, s: &State, monitor_only: bool) {
             .is_some_and(|c| r.camera_key.as_ref() != Some(&c.key))
         {
             "Saved history belongs to another camera or has no verified identity."
+        } else if s.receipt_matches_camera() {
+            "Newer local predictions are available for this camera."
         } else {
-            if s.receipt_matches_camera() {
-                "Newer local predictions are available for this camera."
-            } else {
-                "Saved upload history has not been linked to this camera's identity."
-            }
+            "Saved upload history has not been linked to this camera's identity."
         });
     } else {
         f.commit.set_text("No acknowledged commit recorded");
