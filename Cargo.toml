@@ -23,7 +23,7 @@ levenberg-marquardt = "0.15"
 erfars = "0.2"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 rayon = "1"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "hickory-dns"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls", "hickory-dns"] }
 regex = "1"
 quick-xml = "0.41"
 

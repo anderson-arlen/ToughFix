@@ -7,7 +7,7 @@ pkgdesc='Olympus Tough camera status and automatic TG-1 GPS assistance'
 arch=('x86_64')
 url='https://github.com/anderson-arlen/ToughFix'
 license=('MIT')
-depends=('glibc' 'libgcc' 'gtk4' 'libadwaita>=1.4' 'udisks2' 'systemd' 'kmod' 'hicolor-icon-theme')
+depends=('glibc' 'libgcc' 'gtk4' 'libadwaita>=1.4' 'ca-certificates' 'udisks2' 'systemd' 'kmod' 'hicolor-icon-theme')
 options=('!strip' '!debug')
 install=toughfix.install
 

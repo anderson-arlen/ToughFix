@@ -28,7 +28,7 @@ jobs:
       - name: Install official Arch dependencies
         run: >-
           pacman -Syu --noconfirm --needed
-          rust pkgconf gtk4 libadwaita dbus systemd udisks2 kmod
+          rust cmake pkgconf gtk4 libadwaita ca-certificates dbus systemd udisks2 kmod
           github-cli git desktop-file-utils
 
       - uses: actions/checkout@v6

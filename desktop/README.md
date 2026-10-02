@@ -67,9 +67,10 @@ a required reconnection. Mounted storage must still be ejected afterward.
 
 ## Build and run
 
-Build prerequisites: Rust 1.92+, a C toolchain, pkg-config, and development
+Build prerequisites: Rust 1.92+, a C toolchain, CMake, pkg-config, and development
 packages for GTK 4 and Libadwaita 1.4+. On Arch these are `rust`, `base-devel`,
-`pkgconf`, `gtk4`, and `libadwaita`.
+`cmake`, `pkgconf`, `gtk4`, and `libadwaita`. HTTPS downloads require the system
+certificate store (`ca-certificates`).
 UDisks2 (`udisks2` on Arch) is required for mounting camera storage after the
 connection-time update.
 Cargo.lock pins dependencies.

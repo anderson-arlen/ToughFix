@@ -33,9 +33,10 @@ the camera's normal GPS operation.
 
 ## Install and use
 
-Building from source requires Linux, Rust 1.92 or newer, a C toolchain, `pkg-config`, and development
+Building from source requires Linux, Rust 1.92 or newer, a C toolchain, CMake, `pkg-config`, and development
 packages for GTK 4 and Libadwaita 1.4 or newer. On Arch Linux the build prerequisites
-are `rust`, `base-devel`, `pkgconf`, `gtk4`, and `libadwaita`. Automatic camera launch also needs systemd
+are `rust`, `base-devel`, `cmake`, `pkgconf`, `gtk4`, and `libadwaita`. HTTPS downloads use the system's
+certificate store (`ca-certificates`). Automatic camera launch also needs systemd
 and an active graphical session. The tray uses StatusNotifierItem, supported
 by desktops such as KDE and by Waybar configurations with a tray.
 
