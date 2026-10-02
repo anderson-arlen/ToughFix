@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! GTK/Wayland cannot choose tiling policy. Ask Hyprland to float only our own
-//! newly mapped window, without changing user configuration or later resizes.
+//! mapped window, including reopening it from the tray. Preserve the size at
+//! hide time, without changing user configuration or resizes while visible.
 use gtk::prelude::*;
 use std::{
     io::Read,
@@ -12,11 +13,22 @@ pub fn compact_default(window: &gtk::ApplicationWindow, width: i32, height: i32)
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
         return;
     }
-    let requested = std::rc::Rc::new(std::cell::Cell::new(false));
-    window.connect_map(move |window| {
-        if requested.replace(true) {
-            return;
+    let size = std::rc::Rc::new(std::cell::Cell::new((width, height)));
+    let size_on_layout = size.clone();
+    window.connect_realize(move |window| {
+        if let Some(surface) = window.surface() {
+            let size = size_on_layout.clone();
+            // Track the surface's configured size while it exists. The widget
+            // allocation is already cleared when the unmap signal arrives.
+            surface.connect_layout(move |_, width, height| {
+                if width > 0 && height > 0 {
+                    size.set((width, height));
+                }
+            });
         }
+    });
+    window.connect_map(move |window| {
+        let (width, height) = size.get();
         let title = window.title().unwrap_or_default().to_string();
         std::thread::spawn(move || {
             for _ in 0..12 {

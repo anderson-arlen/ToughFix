@@ -707,7 +707,7 @@ pub fn run(
         controls.append(&automatic);
         settings.append(&controls);
         let upload_interval = adw::SpinRow::builder()
-            .title("Minimum time between GPS uploads")
+            .title("Minimum time between automatic GPS updates")
             .subtitle("Hours · default 48 · expiry and new satellite exclusions override this")
             .adjustment(&gtk::Adjustment::new(48., 1., 168., 1., 24., 0.))
             .build();

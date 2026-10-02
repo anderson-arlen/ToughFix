@@ -93,6 +93,28 @@ def main():
             assert process.poll() is None
             print('PASS: hiding the window keeps monitoring alive')
 
+            command('gapplication', 'launch', APP)
+            until(lambda: window('ToughFix') and window('ToughFix')['floating']
+                  and window('ToughFix')['size'] == [560, 660])
+            selector = 'address:' + window('ToughFix')['address']
+            command('hyprctl', 'dispatch',
+                    f'hl.dsp.window.resize({{window="{selector}",x=620,y=700}})')
+            until(lambda: window('ToughFix')['size'] == [620, 700])
+            # Allow GTK to receive the compositor's configure and allocate the
+            # resized contents before hiding the surface.
+            time.sleep(.3)
+            action('demo-settings')
+            until(lambda: window('ToughFix — Settings'))
+            action('demo-hide')
+            until(lambda: not visible())
+            command('gapplication', 'launch', APP)
+            until(lambda: window('ToughFix — Settings')
+                  and window('ToughFix — Settings')['floating']
+                  and window('ToughFix — Settings')['size'] == [620, 700])
+            action('demo-hide')
+            until(lambda: not visible())
+            print('PASS: reopening floats the window and preserves its resized dimensions and selected view')
+
             action('demo-disconnect')
             until(lambda: registered(process.pid) is None)
             action('demo-connect')

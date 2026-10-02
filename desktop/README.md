@@ -27,8 +27,9 @@ with a bottom navigation bar below 520 logical pixels. Native controls keep
 their theme styling; custom CSS is limited to content cards and labels.
 
 The main window starts at 560 × 660. On Hyprland, ToughFix requests floating
-placement for its own window, without editing compositor
-configuration. Later resizes and placement changes are left to the user. Other
+placement for its own window each time it opens, without editing compositor
+configuration. Reopening retains the size used before hiding. Resizes and
+placement changes while the window is open are left to the user. Other
 desktops retain their normal placement policy. The battery bolt means USB is
 connected; active charging is not exposed by the camera. Unknown battery and
 free-space readings are shown as unavailable, rather than zero or empty.
