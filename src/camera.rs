@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Linux SG_IO and the recovered Olympus PTP tunnel. No normal sector writes.
-use crate::model::{CameraInfo, Device, Phase, Storage};
+use crate::model::{CameraInfo, CameraModel, Device, Phase, Storage};
 use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -21,6 +21,8 @@ const CHUNK: usize = 61_440;
 const REQUIRED: &[u16] = &[
     0x1001, 0x1002, 0x1003, 0x9126, 0x9127, 0x9128, 0x9129, 0x912a, 0x912b, 0x912c,
 ];
+mod tough8010;
+use tough8010::{mode_cdb, probe_8010};
 
 #[derive(Debug)]
 struct ReconnectRequired;
@@ -81,13 +83,18 @@ fn discover_at(root: &Path, devices: &Path, mounts: &str) -> Vec<Device> {
             continue;
         };
         let get = |p: PathBuf| fs::read_to_string(p).unwrap_or_default().trim().to_owned();
-        if get(sys.join("device/vendor")) != "OLYMPUS" || get(sys.join("device/model")) != "TG-1" {
+        if get(sys.join("device/vendor")) != "OLYMPUS" {
             continue;
         }
+        let model = match get(sys.join("device/model")).as_str() {
+            "TG-1" => CameraModel::Tg1,
+            "StylusTough-8010" => CameraModel::Tough8010,
+            _ => continue,
+        };
         let Some(usb) = sys.ancestors().find(|p| p.join("idVendor").exists()) else {
             continue;
         };
-        if get(usb.join("idVendor")) != "07b4" || get(usb.join("idProduct")) != "012d" {
+        if get(usb.join("idVendor")) != "07b4" || !model.accepts_pid(&get(usb.join("idProduct"))) {
             continue;
         }
         let serial = get(usb.join("serial"));
@@ -120,6 +127,7 @@ fn discover_at(root: &Path, devices: &Path, mounts: &str) -> Vec<Device> {
             })
             .collect();
         found.push(Device {
+            model,
             path: devices.join(entry.file_name()),
             sys_path: sys.clone(),
             connection_key: key,
@@ -173,7 +181,7 @@ pub fn connection_identity(device: &Device) -> Option<String> {
             .ok()
             .map(|s| s.trim().to_owned())
     };
-    if read("idVendor")? != "07b4" || read("idProduct")? != "012d" {
+    if read("idVendor")? != "07b4" || !device.model.accepts_pid(&read("idProduct")?) {
         return None;
     }
     Some(format!(
@@ -295,7 +303,9 @@ impl Transport for LinuxTransport {
         timeout: u32,
     ) -> Result<Vec<u8>> {
         ensure!(
-            (1..=MAX_CONTAINER).contains(&size) && cdb.len() <= 16,
+            size <= MAX_CONTAINER
+                && cdb.len() <= 16
+                && (size > 0 || (outgoing.is_none() && (cdb == mode_cdb(0) || cdb == mode_cdb(1)))),
             "Invalid SCSI transfer size"
         );
         ensure!(
@@ -307,7 +317,13 @@ impl Transport for LinuxTransport {
         let mut sense = [0u8; 64];
         let mut header = SgIoHdr {
             interface_id: b'S' as i32,
-            dxfer_direction: if outgoing.is_some() { -2 } else { -3 },
+            dxfer_direction: if size == 0 {
+                -1
+            } else if outgoing.is_some() {
+                -2
+            } else {
+                -3
+            },
             cmd_len: cdb.len() as u8,
             mx_sb_len: 64,
             dxfer_len: size as u32,
@@ -373,14 +389,18 @@ impl<T: Transport> Session<T> {
         self.io.transfer(&cdb, size, outgoing, self.timeout)
     }
     pub fn inquiry(&mut self) -> Result<()> {
+        self.inquiry_for(&CameraModel::Tg1)
+    }
+    fn inquiry_for(&mut self, model: &CameraModel) -> Result<()> {
         let raw = self
             .io
             .transfer(&[0x12, 0, 0, 0, 96, 0], 96, None, self.timeout)?;
         ensure!(
             raw.len() >= 36
                 && raw[8..16].trim_ascii() == b"OLYMPUS"
-                && raw[16..32].trim_ascii() == b"TG-1",
-            "SCSI identity is not Olympus TG-1"
+                && raw[16..32].trim_ascii() == model.scsi_name().as_bytes(),
+            "SCSI identity is not {}",
+            model.name()
         );
         Ok(())
     }
@@ -628,7 +648,7 @@ struct Identity {
     operations: Vec<u16>,
     properties: Vec<u16>,
 }
-fn identity(raw: &[u8], fallback: &str) -> Result<Identity> {
+fn identity(raw: &[u8], fallback: &str, expected: &CameraModel) -> Result<Identity> {
     let mut r = Reader { data: raw, pos: 0 };
     r.take(8)?;
     r.string()?;
@@ -643,12 +663,19 @@ fn identity(raw: &[u8], fallback: &str) -> Result<Identity> {
     let firmware = r.string()?;
     let serial = r.string()?;
     ensure!(
-        manufacturer == "OLYMPUS" && model == "TG-1",
-        "PTP identity is not Olympus TG-1"
+        manufacturer == "OLYMPUS" && model == expected.scsi_name(),
+        "PTP identity is not {}",
+        expected.name()
     );
     ensure!(
-        REQUIRED.iter().all(|o| operations.contains(o)),
-        "Required GPS assistance operations not advertised"
+        (if expected.supports_gps() {
+            REQUIRED
+        } else {
+            &[0x1001, 0x1002, 0x1003]
+        })
+        .iter()
+        .all(|o| operations.contains(o)),
+        "Required camera operations not advertised"
     );
     Ok(Identity {
         firmware,
@@ -662,7 +689,7 @@ fn identity(raw: &[u8], fallback: &str) -> Result<Identity> {
     })
 }
 pub fn capture_key(raw: &[u8]) -> Result<String> {
-    let key = identity(raw, "")?.key;
+    let key = identity(raw, "", &CameraModel::Tg1)?.key;
     ensure!(!key.is_empty(), "No serial identity in capture");
     Ok(key)
 }
@@ -712,6 +739,7 @@ fn info<T: Transport>(session: &mut Session<T>, device: &Device) -> Result<Camer
     let id = identity(
         &session.operation(0x1001, &[], true, None)?,
         &device.connection_key,
+        &device.model,
     )?;
     let battery = if id.operations.contains(&0x1015) && id.properties.contains(&0x5001) {
         match session.operation(0x1015, &[0x5001], true, None) {
@@ -730,12 +758,17 @@ fn info<T: Transport>(session: &mut Session<T>, device: &Device) -> Result<Camer
     };
     // Finish identity, battery and SD card checks before issuing any
     // GPS-specific commands. A failed general check cannot reach an upload.
-    let gps_chip = word(&session.operation(0x9126, &[], true, None)?)?;
-    let transfer_limit = word(&session.operation(0x9127, &[], true, None)?)?;
-    ensure!(
-        gps_chip == 1 && (1..=131072).contains(&transfer_limit),
-        "Unexpected GPS chip or transfer limit"
-    );
+    let (gps_chip, transfer_limit) = if device.model.supports_gps() {
+        let chip = word(&session.operation(0x9126, &[], true, None)?)?;
+        let limit = word(&session.operation(0x9127, &[], true, None)?)?;
+        ensure!(
+            chip == 1 && (1..=131072).contains(&limit),
+            "Unexpected GPS chip or transfer limit"
+        );
+        (chip, limit)
+    } else {
+        (0, 0)
+    };
     Ok(CameraInfo {
         key: id.key,
         firmware: id.firmware,
@@ -748,12 +781,15 @@ fn info<T: Transport>(session: &mut Session<T>, device: &Device) -> Result<Camer
 }
 
 pub fn probe(device: &Device) -> Result<CameraInfo> {
+    if matches!(device.model, CameraModel::Tough8010) {
+        return probe_8010(device);
+    }
     let mut session = Session::new(LinuxTransport::open(device, false)?);
     probe_session(&mut session, device)
 }
 
 fn probe_session<T: Transport>(session: &mut Session<T>, device: &Device) -> Result<CameraInfo> {
-    session.inquiry()?;
+    session.inquiry_for(&device.model)?;
     session.operation(0x1002, &[1], false, None)?;
     let result = info(session, device);
     close_session(session, result)
@@ -788,6 +824,10 @@ pub fn upload(
     authorize: impl FnMut(&CameraInfo) -> Result<bool>,
     commit: impl FnMut(&CameraInfo) -> Result<()>,
 ) -> Result<UploadOutcome> {
+    ensure!(
+        device.model.supports_gps(),
+        "This camera has no GPS receiver"
+    );
     let mut session = Session::new(LinuxTransport::open(device, true)?);
     upload_session(
         &mut session,
@@ -809,6 +849,10 @@ fn upload_session<T: Transport>(
     mut commit: impl FnMut(&CameraInfo) -> Result<()>,
     sleep: impl Fn(Duration),
 ) -> Result<UploadOutcome> {
+    ensure!(
+        device.model.supports_gps(),
+        "This camera has no GPS receiver"
+    );
     progress(Phase::Checking);
     session.inquiry()?;
     session.operation(0x1002, &[1], false, None)?;
@@ -922,11 +966,24 @@ mod tests {
         assert!(storage_in_use(
             &ensure_storage_unmounted(&found[0]).unwrap_err()
         ));
+        fs::write(disk.join("device/model"), "StylusTough-8010").unwrap();
+        for pid in ["0123", "0124"] {
+            fs::write(usb.join("idProduct"), pid).unwrap();
+            let found = discover_at(&root, Path::new("/dev"), "");
+            assert_eq!(found.len(), 1);
+            assert!(matches!(found[0].model, CameraModel::Tough8010));
+        }
+        fs::write(usb.join("idProduct"), "0125").unwrap();
+        assert!(discover_at(&root, Path::new("/dev"), "").is_empty());
+        fs::write(usb.join("idProduct"), "0124").unwrap();
+        fs::write(disk.join("device/model"), "Unknown camera").unwrap();
+        assert!(discover_at(&root, Path::new("/dev"), "").is_empty());
     }
 
     use super::*;
     #[derive(Default)]
     struct Fake {
+        model: CameraModel,
         command: Option<(u16, u32)>,
         calls: Vec<(u8, u32)>,
         codes: Vec<u16>,
@@ -973,7 +1030,9 @@ mod tests {
                 0x12 => {
                     let mut raw = vec![0; 96];
                     raw[8..16].copy_from_slice(b"OLYMPUS ");
-                    raw[16..32].copy_from_slice(b"TG-1            ");
+                    raw[16..32].fill(b' ');
+                    let name = self.model.scsi_name().as_bytes();
+                    raw[16..16 + name.len()].copy_from_slice(name);
                     Ok(raw)
                 }
                 0xc0 => {
@@ -1035,10 +1094,17 @@ mod tests {
         fake_identity_with_telemetry(false)
     }
     fn fake_identity_with_telemetry(telemetry: bool) -> Vec<u8> {
+        fake_identity_for(&CameraModel::Tg1, telemetry)
+    }
+    fn fake_identity_for(model: &CameraModel, telemetry: bool) -> Vec<u8> {
         let mut raw = vec![0; 8];
         raw.push(0); // Empty extension description.
         raw.extend(0u16.to_le_bytes());
-        let mut operations = REQUIRED.to_vec();
+        let mut operations = if model.supports_gps() {
+            REQUIRED.to_vec()
+        } else {
+            vec![0x1001, 0x1002, 0x1003]
+        };
         if telemetry {
             operations.extend([0x1015, 0x1004, 0x1005]);
         }
@@ -1054,7 +1120,7 @@ mod tests {
         for _ in 0..2 {
             raw.extend(0u32.to_le_bytes());
         }
-        for value in ["OLYMPUS", "TG-1", "1.00", "camera-a"] {
+        for value in ["OLYMPUS", model.scsi_name(), "1.00", "camera-a"] {
             let chars: Vec<_> = value.encode_utf16().collect();
             raw.push((chars.len() + 1) as u8);
             for c in chars {
@@ -1063,6 +1129,48 @@ mod tests {
             raw.extend(0u16.to_le_bytes());
         }
         raw
+    }
+
+    #[test]
+    fn non_gps_camera_reads_battery_and_storage_but_cannot_upload() {
+        let device = Device {
+            model: CameraModel::Tough8010,
+            ..fake_device()
+        };
+        let mut session = Session::new(Fake {
+            model: CameraModel::Tough8010,
+            device_info: Some(fake_identity_for(&CameraModel::Tough8010, true)),
+            ..Default::default()
+        });
+        let info = probe_session(&mut session, &device).unwrap();
+        assert_eq!(info.battery, Some(84));
+        assert_eq!((info.gps_chip, info.transfer_limit), (0, 0));
+        assert_eq!(
+            session.io.codes,
+            [0x1002, 0x1001, 0x1015, 0x1004, 0x1005, 0x1003]
+        );
+        session.io.codes.clear();
+        let error = upload_session(
+            &mut session,
+            &device,
+            &[0; 130720],
+            |_| {},
+            |_| panic!("Cannot authorize non-GPS camera"),
+            |_| panic!("Cannot commit to non-GPS camera"),
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("no GPS receiver"));
+        assert!(session.io.codes.is_empty());
+        assert!(upload(&device, &[0; 130720], |_| {}, |_| Ok(true), |_| Ok(())).is_err());
+        assert!(
+            identity(
+                &fake_identity_for(&CameraModel::Tough8010, true),
+                "",
+                &CameraModel::Tg1
+            )
+            .is_err()
+        );
     }
 
     #[test]

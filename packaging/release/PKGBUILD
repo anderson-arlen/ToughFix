@@ -3,7 +3,7 @@
 pkgname=toughfix
 pkgver="${TOUGHFIX_RELEASE_VERSION:?TOUGHFIX_RELEASE_VERSION must be supplied}"
 pkgrel=1
-pkgdesc='Automatic GPS assistance and camera status for the Olympus Tough TG-1'
+pkgdesc='Olympus Tough camera status and automatic TG-1 GPS assistance'
 arch=('x86_64')
 url='https://github.com/anderson-arlen/ToughFix'
 license=('MIT')

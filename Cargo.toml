@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT"
-description = "Olympus TG-1 GPS assistance desktop monitor and updater"
+description = "Olympus Tough camera status and TG-1 GPS assistance for Linux"
 
 [dependencies]
 adw = { package = "libadwaita", version = "0.9", features = ["v1_4"] }
@@ -23,7 +23,7 @@ levenberg-marquardt = "0.15"
 erfars = "0.2"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 rayon = "1"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "hickory-dns"] }
 regex = "1"
 quick-xml = "0.41"
 

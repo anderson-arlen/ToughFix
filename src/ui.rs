@@ -64,14 +64,20 @@ struct Fields {
     message: gtk::Label,
     upload: gtk::Button,
     refresh: gtk::Button,
+    update_gps: gtk::Button,
     camera_refresh: gtk::Button,
     automatic: gtk::Switch,
+    upload_interval: adw::SpinRow,
     tray_error: gtk::Label,
     activity_title: gtk::Label,
     activity_detail: gtk::Label,
     spinner: gtk::Spinner,
     activity_card: gtk::Box,
     camera_image: gtk::Picture,
+    camera_8010_image: gtk::Picture,
+    camera_name: gtk::Label,
+    gps_card: gtk::Box,
+    gps_details: Vec<gtk::Box>,
     health_badge: gtk::Label,
     health_caption: gtk::Label,
     resources: Vec<metrics::Resources>,
@@ -123,6 +129,13 @@ fn render(f: &Fields, s: &State, monitor_only: bool) {
     let activity = s.activity();
     f.activity_title.set_text(&activity.title);
     f.activity_detail.set_text(&activity.detail);
+    f.activity_detail
+        .set_lines(if s.data.refresh_error.is_some() && activity.warning {
+            3
+        } else {
+            2
+        });
+    f.activity_detail.set_tooltip_text(Some(&activity.detail));
     f.spinner.set_spinning(activity.busy);
     f.spinner.set_visible(activity.busy);
     f.progress.set_visible(activity.busy);
@@ -223,10 +236,22 @@ fn render(f: &Fields, s: &State, monitor_only: bool) {
     f.connection.set_text(
         &s.device
             .as_ref()
-            .map(|d| format!("Olympus TG-1 · {}", d.path.display()))
+            .map(|d| format!("{} · {}", d.model.name(), d.path.display()))
             .unwrap_or_else(|| "No camera connected".into()),
     );
-    f.camera.set_text(&s.camera_error.clone().unwrap_or_else(||s.camera.as_ref().map(|c|format!("Camera responded normally · firmware {}\nBattery: {} · GPS interface {}\nLast checked {} · snapshot",c.firmware,c.battery.map(|b|format!("{b}%")).unwrap_or_else(||"not reported".into()),c.gps_chip,c.read_at.map(|t|t.with_timezone(&chrono::Local).format("%H:%M:%S").to_string()).unwrap_or_default())).unwrap_or_else(||if s.storage_mounted(){"USB storage connected · camera checks paused while storage is mounted"}else if s.device.is_some(){"Camera information will be checked when GPS assistance is updated"}else{"Connect the camera in Storage mode"}.into())));
+    f.camera.set_text(&s.camera_error.clone().unwrap_or_else(||s.camera.as_ref().map(|c|format!("Camera responded normally · firmware {}\nBattery: {} · {}\nLast checked {} · snapshot",c.firmware,c.battery.map(|b|format!("{b}%")).unwrap_or_else(||"not reported".into()),if s.gps_supported(){format!("GPS interface {}",c.gps_chip)}else{"No GPS receiver".into()},c.read_at.map(|t|t.with_timezone(&chrono::Local).format("%H:%M:%S").to_string()).unwrap_or_default())).unwrap_or_else(||if s.storage_mounted(){"USB storage connected · camera checks paused while storage is mounted"}else if s.device.is_some(){"Camera information will be checked on connection"}else{"Connect the camera in Storage mode"}.into())));
+    f.camera_name.set_text(
+        s.device
+            .as_ref()
+            .map_or("Olympus Tough", |d| d.model.name()),
+    );
+    f.camera_image.set_visible(s.gps_supported());
+    f.camera_8010_image.set_visible(!s.gps_supported());
+    f.gps_card.set_visible(s.gps_supported());
+    for card in &f.gps_details {
+        card.set_visible(s.gps_supported());
+    }
+    f.upload.set_visible(s.gps_supported());
     let storage = s
         .device
         .as_ref()
@@ -390,7 +415,9 @@ fn render(f: &Fields, s: &State, monitor_only: bool) {
         s.phase.device_busy()
             || s.storage_preparing
             || s.reconnect_required
-            || s.storage_error.is_some(),
+            || s.storage_error
+                .as_deref()
+                .is_some_and(|error| error != activity.detail),
     );
     f.banner.set_lines(2);
     f.banner.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -420,7 +447,8 @@ fn render(f: &Fields, s: &State, monitor_only: bool) {
         }
     ));
     f.upload.set_sensitive(
-        s.device.is_some()
+        s.gps_supported()
+            && s.device.is_some()
             && !s.storage_mounted()
             && s.camera_error.is_none()
             && s.data.upload_allowed
@@ -440,16 +468,26 @@ fn render(f: &Fields, s: &State, monitor_only: bool) {
         "Upload latest predictions"
     });
     f.refresh.set_sensitive(
-        !s.phase.device_busy()
+        s.gps_supported()
+            && !s.phase.device_busy()
             && !s.updating_sources
             && !s.quit_pending
             && !s.demo
             && !monitor_only,
     );
+    f.update_gps
+        .set_sensitive(s.can_update_gps() && !monitor_only);
     f.camera_refresh.set_sensitive(s.can_refresh_camera());
-    f.automatic.set_sensitive(!monitor_only && !s.quit_pending);
+    f.automatic
+        .set_sensitive(s.gps_supported() && !monitor_only && !s.quit_pending);
     if f.automatic.is_active() != s.automatic {
         f.automatic.set_active(s.automatic);
+    }
+    f.upload_interval
+        .set_sensitive(s.gps_supported() && !monitor_only && !s.quit_pending);
+    if f.upload_interval.value() as u32 != s.upload_interval_hours() {
+        f.upload_interval
+            .set_value(s.upload_interval_hours() as f64);
     }
 }
 
@@ -499,7 +537,7 @@ pub fn run(
                 glib::Propagation::Proceed
             });
         }
-        for (name,action) in [("quit",Action::Quit),("refresh",Action::Refresh),("refresh-camera",Action::RefreshCamera),("upload",if demo{Action::DemoUpload}else{Action::Upload})] {
+        for (name,action) in [("quit",Action::Quit),("refresh",Action::Refresh),("refresh-camera",Action::RefreshCamera),("update-gps",Action::UpdateGps),("upload",if demo{Action::DemoUpload}else{Action::Upload})] {
             let a=gtk::gio::SimpleAction::new(name,None);let shared=shared.clone();let tx=tx.clone();
             a.connect_activate(move|_,_|{if matches!(action,Action::Quit){quit(&shared,&tx)}else{let _=tx.send(action.clone());}});app.add_action(&a);
         }
@@ -555,7 +593,18 @@ pub fn run(
         camera_image.set_size_request(180, 112);
         camera_image.set_valign(gtk::Align::Center);
         camera_image.set_alternative_text(Some("Illustration of an Olympus Tough TG-1 camera"));
-        let illustration = adw::Clamp::builder().maximum_size(180).tightening_threshold(180).child(&camera_image).build();
+        let image_stream = gtk::gio::MemoryInputStream::from_bytes(&glib::Bytes::from_static(include_bytes!("../desktop/assets/tough-8010.png")));
+        let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream(&image_stream, None::<&gtk::gio::Cancellable>).expect("Embedded Tough-8010 illustration");
+        let camera_8010_image = gtk::Picture::for_paintable(&gtk::gdk::Texture::for_pixbuf(&pixbuf));
+        camera_8010_image.set_can_shrink(true);
+        camera_8010_image.set_size_request(180, 112);
+        camera_8010_image.set_valign(gtk::Align::Center);
+        camera_8010_image.set_alternative_text(Some("Illustration of an Olympus Stylus Tough-8010 camera"));
+        camera_8010_image.set_visible(false);
+        let image_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        image_slot.append(&camera_image);
+        image_slot.append(&camera_8010_image);
+        let illustration = adw::Clamp::builder().maximum_size(180).tightening_threshold(180).child(&image_slot).build();
         camera_row.append(&illustration);
         let summary = gtk::Box::new(gtk::Orientation::Vertical, 10);
         summary.set_hexpand(true);
@@ -591,10 +640,15 @@ pub fn run(
         gps_content.append(&assistance_summary);
         let last_update_summary = label("subtitle");
         gps_content.append(&last_update_summary);
-        let refresh = gtk::Button::with_label("Refresh satellite data");
-        refresh.set_halign(gtk::Align::Start);
-        refresh.set_tooltip_text(Some("Check for new satellite observations and generate fresh predictions if needed"));
-        gps_content.append(&refresh);
+        let gps_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let update_gps = gtk::Button::with_label("Update GPS now");
+        update_gps.add_css_class("suggested-action");
+        update_gps.set_tooltip_text(Some("Fetch the latest satellite data and update this camera, ignoring the automatic interval. Briefly unmounts storage; a busy card is left alone. Identical assistance data is not rewritten."));
+        let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
+        refresh.set_tooltip_text(Some("Refresh satellite data and predictions without updating the camera"));
+        gps_actions.append(&update_gps);
+        gps_actions.append(&refresh);
+        gps_content.append(&gps_actions);
         gps_card.append(&gps_content);
         page.append(&gps_card);
 
@@ -604,6 +658,7 @@ pub fn run(
         let camera = field(&c, "Health snapshot");
         let storage = field(&c, "Storage and mount paths");
         let c = card(&advanced, "Satellite observations");
+        let mut gps_details = vec![c.clone()];
         let observed = field(&c, "Latest health observations");
         let fitted = field(&c, "Latest fitting data");
         let source = field(&c, "Source");
@@ -613,6 +668,7 @@ pub fn run(
         let health = field(&c, "Satellite health");
         let training = field(&c, "Prediction input arc");
         let c = card(&advanced, "Prediction details");
+        gps_details.push(c.clone());
         let validity = field(&c, "Validity");
         let satellites = field(&c, "Coverage");
         let quality = field(&c, "Model statistics");
@@ -621,6 +677,7 @@ pub fn run(
         hash.add_css_class("mono");
         hash.set_wrap_mode(gtk::pango::WrapMode::Char);
         let c = card(&advanced, "Last confirmed camera commit");
+        gps_details.push(c.clone());
         let commit = field(&c, "Recorded commit");
         let match_status = label("subtitle");
         c.append(&match_status);
@@ -649,6 +706,12 @@ pub fn run(
         controls.append(&auto_label);
         controls.append(&automatic);
         settings.append(&controls);
+        let upload_interval = adw::SpinRow::builder()
+            .title("Minimum time between GPS uploads")
+            .subtitle("Hours · default 48 · expiry and new satellite exclusions override this")
+            .adjustment(&gtk::Adjustment::new(48., 1., 168., 1., 24., 0.))
+            .build();
+        settings.append(&upload_interval);
         camera_startup_setting(&settings, demo || monitor_only, config_dir.clone());
         advanced.add_css_class("page");
         let resources_details = metrics::Resources::new();
@@ -688,6 +751,29 @@ pub fn run(
         root.append(&status_area);
         root.append(&stack);
         if demo {
+            let action = gtk::gio::SimpleAction::new("demo-auto-mounted",None);
+            let mounted_shared = shared.clone();
+            action.connect_activate(move |_,_| {
+                let mut s = mounted_shared.lock().unwrap();
+                s.storage_preparing = false;
+                s.storage_error = None;
+                s.camera_note = Some("Storage is ready for browsing · use camera refresh for a current snapshot".into());
+                if let Some(d) = s.device.as_mut() { d.mounts=vec!["/media/demo-camera".into()]; }
+            });
+            app.add_action(&action);
+            let action = gtk::gio::SimpleAction::new("demo-recent-update",None);
+            let recent_shared = shared.clone();
+            action.connect_activate(move |_,_| {
+                let mut s = recent_shared.lock().unwrap();
+                let gps = crate::model::now_gps();
+                let date = |offset: i64| chrono::DateTime::from_timestamp((gps+315964800.) as i64+offset,0).unwrap().format("%Y-%m-%dT%H:%M:%S").to_string();
+                s.receipt = Some(crate::model::Receipt {
+                    camera_key: Some("demo".into()), usb_key: Some("demo".into()), sha256: "earlier-demo-predictions".into(), bytes:130720,
+                    start_gps:date(-86400), end_gps:date(13*86400), committed_at:chrono::Utc::now()-chrono::Duration::hours(6),
+                    session_closed:true, origin:"Demo only".into(), excluded_prns:Some(s.data.excluded_prns.clone()),
+                });
+            });
+            app.add_action(&action);
             let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             for (name, connected) in [("Connect demo camera", true), ("Disconnect demo camera", false)] {
                 let button = gtk::Button::with_label(name);
@@ -700,6 +786,35 @@ pub fn run(
         toolbar.set_content(Some(&root));
         window.set_content(Some(&toolbar));
         if demo {
+            let action = gtk::gio::SimpleAction::new("demo-refresh-failed", None);
+            let demo_state = shared.clone();
+            action.connect_activate(move |_, _| {
+                let mut state = demo_state.lock().unwrap();
+                let error = "Downloading https://maia.usno.navy.mil/ser7/finals2000A.all: client error (Connect): Connection reset by peer (os error 104)".to_owned();
+                state.data.refresh_error = Some(error.clone());
+                state.data.failures = vec![error, "Satellite health checks need refreshing".into()];
+                state.data.upload_allowed = false;
+                state.refresh_retry_seconds = Some(30);
+                state.updating_sources = false;
+                state.storage_preparing = false;
+                state.phase = crate::model::Phase::Idle;
+            });
+            app.add_action(&action);
+            let action = gtk::gio::SimpleAction::new("demo-8010", None);
+            let demo_state = shared.clone();
+            action.connect_activate(move |_, _| {
+                let mut state = demo_state.lock().unwrap();
+                if let Some(device) = state.device.as_mut() {
+                    device.model = crate::model::CameraModel::Tough8010;
+                }
+                if let Some(camera) = state.camera.as_mut() {
+                    camera.gps_chip = 0;
+                    camera.transfer_limit = 0;
+                    camera.battery = Some(100);
+                }
+                state.receipt = None;
+            });
+            app.add_action(&action);
             for name in ["demo-preparing", "demo-storage-error", "demo-storage-ready"] {
                 let action = gtk::gio::SimpleAction::new(name, None);
                 let shared = shared.clone();
@@ -785,12 +900,21 @@ pub fn run(
                 app.add_action(&action);
             }
         }
-        let fields = Rc::new(Fields { connection, camera, storage, observed, fitted, clocks, source, source_link, health, training, validity, satellites, quality, hash, commit, match_status, commit_hash, banner, progress, message, upload, refresh, camera_refresh, automatic, tray_error, activity_title, activity_detail, spinner, activity_card, camera_image, health_badge, health_caption, resources: vec![resources_main,resources_details], assistance_summary, last_update_summary });
+        let fields = Rc::new(Fields { connection, camera, storage, observed, fitted, clocks, source, source_link, health, training, validity, satellites, quality, hash, commit, match_status, commit_hash, banner, progress, message, upload, refresh, update_gps, camera_refresh, automatic, upload_interval, tray_error, activity_title, activity_detail, spinner, activity_card, camera_image, camera_8010_image, camera_name: name, gps_card, gps_details, health_badge, health_caption, resources: vec![resources_main,resources_details], assistance_summary, last_update_summary });
+        let initial_state = shared.lock().unwrap().clone();
+        render(&fields, &initial_state, monitor_only);
         {let tx=tx.clone();fields.refresh.connect_clicked(move |_|{let _=tx.send(Action::Refresh);});}
+        {let tx=tx.clone();fields.update_gps.connect_clicked(move |_|{let _=tx.send(Action::UpdateGps);});}
         {let tx=tx.clone();fields.camera_refresh.connect_clicked(move |_|{let _=tx.send(Action::RefreshCamera);});}
         {let tx=tx.clone();fields.upload.connect_clicked(move |_|{let _=tx.send(if demo{Action::DemoUpload}else{Action::Upload});});}
         {let shared=shared.clone();let tx=tx.clone();fields.automatic.connect_active_notify(move|switch|{
             if shared.lock().unwrap().automatic!=switch.is_active(){let _=tx.send(Action::SetAutomatic(switch.is_active()));}
+        });}
+        {let shared=shared.clone();let tx=tx.clone();fields.upload_interval.connect_value_notify(move|row|{
+            let hours = row.value() as u32;
+            if shared.lock().unwrap().upload_interval_hours() != hours {
+                let _ = tx.send(Action::SetUploadInterval(hours));
+            }
         });}
         let ui_actions=Arc::new(Mutex::new(Vec::new()));let tray=Rc::new(RefCell::new(Manager::new()));
         let app=app.clone();let window_timer=window.clone();let shared=shared.clone();let tx=tx.clone();let exiting=exiting.clone();

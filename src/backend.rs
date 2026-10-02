@@ -28,6 +28,21 @@ pub struct Config {
     pub monitor_only: bool,
 }
 
+fn source_refresh_delay(failures: u32, checked_gps: Option<f64>, gps_now: f64) -> Duration {
+    if failures > 0 {
+        // Recover quickly from transient network errors, then back off.
+        return Duration::from_secs((30u64 << (failures - 1).min(4)).min(300));
+    }
+    // Refresh before the one-hour upload check expires. The source timestamp
+    // precedes orbit fitting, so a long calculation must shorten this delay.
+    let remaining = checked_gps.map_or(0., |checked| 2700. - (gps_now - checked));
+    Duration::from_secs_f64(remaining.clamp(0., 1800.))
+}
+
+fn refresh_on_connection(device: Option<&Device>, data: &DataInfo) -> bool {
+    device.is_some_and(|d| d.model.supports_gps()) && !data.upload_allowed
+}
+
 /// Vendor sessions can interrupt USB storage. Permit one automatic update per
 /// USB attachment (including its status query), with one initial normal unmount.
 #[derive(Default)]
@@ -102,9 +117,11 @@ impl CameraActivity {
     fn should_release(&self, now: Instant, state: &State) -> bool {
         self.automatic_attempted
             || (self.probe_attempted
-                && (!state.automatic
+                && (!state.gps_supported()
+                    || !state.automatic
                     || (!state.updating_sources
-                        && (!state.data.upload_allowed || state.matches_latest()))))
+                        && (!state.data.upload_allowed || state.matches_latest()))
+                    || state.automatic_upload_wait().is_some()))
             || self.initial_expired(now)
             || state.multiple_cameras
             || state.reconnect_required
@@ -114,6 +131,10 @@ impl CameraActivity {
         // Give storage reattachment/automount time to appear before another session.
         self.unmounted_since = None;
     }
+    fn rebind_after_status_check(&mut self, connection: &str) {
+        // A mode change is part of the same check, not a new plug-in event.
+        self.connection = connection.into();
+    }
 }
 
 pub fn read_json(path: impl AsRef<Path>) -> Result<Value> {
@@ -121,6 +142,35 @@ pub fn read_json(path: impl AsRef<Path>) -> Result<Value> {
 }
 fn text(v: &Value, key: &str) -> String {
     v[key].as_str().unwrap_or_default().to_string()
+}
+fn save_upload_settings(config: &Config, automatic: bool, hours: u32) -> Result<()> {
+    let path = config.state_dir.join("settings.json");
+    let mut settings = read_json(&path).unwrap_or_else(|_| json!({}));
+    ensure!(settings.is_object(), "Invalid settings file");
+    settings["automatic"] = json!(automatic);
+    settings["automatic_interval_hours"] = json!(hours);
+    atomic_json(&path, &settings)
+}
+fn archive_exclusions(data: &[u8]) -> Option<Vec<u8>> {
+    use crate::predictor::validation::{BLOCK, RECORD};
+    (data.len() == 4 * BLOCK).then(|| {
+        (1..=32u8)
+            .filter(|&prn| {
+                !(0..2).any(|week| data[week * BLOCK + 6 + (prn as usize - 1) * RECORD + 1] == 0)
+            })
+            .collect()
+    })
+}
+fn hydrate_receipt(config: &Config, mut receipt: Receipt) -> Receipt {
+    if receipt.excluded_prns.is_none()
+        && let Ok(data) = engine::archive(
+            &config.state_dir,
+            &json!({"archive":format!("{}.cep", receipt.sha256)}),
+        )
+    {
+        receipt.excluded_prns = archive_exclusions(&data);
+    }
+    receipt
 }
 pub fn atomic_json(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     let tmp = path.with_extension("json.tmp");
@@ -159,7 +209,7 @@ fn latest_receipt(config: &Config) -> Option<Receipt> {
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
     if let Some(receipt) = receipts.pop() {
-        return Some(receipt);
+        return Some(hydrate_receipt(config, receipt));
     }
     // Import the successful research trial as history, never associate it with an
     // arbitrary newly connected device. Binding requires the private identity capture.
@@ -201,6 +251,7 @@ fn latest_receipt(config: &Config) -> Option<Receipt> {
         committed_at: DateTime::from_timestamp((at + 315964800. - 18.) as i64, 0)?,
         session_closed: report["session_closed"] == true,
         origin: "Verified research upload".into(),
+        excluded_prns: None,
     })
 }
 
@@ -253,7 +304,8 @@ fn accept_camera_info(config: &Config, shared: &Shared, device: &Device, info: C
         .into_iter()
         .rev()
         .find(|r| r.camera_key.as_ref() == Some(&info.key));
-    let receipt = receipt.map(|mut r| {
+    let receipt = receipt.map(|r| {
+        let mut r = hydrate_receipt(config, r);
         r.usb_key = device.serial_key.clone();
         if let Err(e) = record(config, &r) {
             eprintln!("ToughFix: could not link upload history: {e:#}");
@@ -265,6 +317,14 @@ fn accept_camera_info(config: &Config, shared: &Shared, device: &Device, info: C
     s.camera = Some(info);
     s.camera_cached = false;
     s.camera_error = None;
+    s.camera_note = None;
+}
+fn note_automatic_mount(shared: &Shared) {
+    let mut s = shared.lock().unwrap();
+    s.storage_error = None;
+    s.camera_note =
+        Some("Storage is ready for browsing · use camera refresh for a current snapshot".into());
+    s.message = "Initial camera check skipped because storage mounted automatically".into();
 }
 
 /// An explicit read-only refresh does not touch the automatic connection budget
@@ -377,16 +437,22 @@ fn data_info(config: &Config) -> DataInfo {
                 .collect()
         })
         .unwrap_or_default();
+    let refresh_error = (status["refresh_ok"] == false).then(|| {
+        status["error"]
+            .as_str()
+            .unwrap_or("Satellite data refresh failed")
+            .to_owned()
+    });
+    if status["refresh_ok"] != true {
+        failures.insert(
+            0,
+            refresh_error
+                .clone()
+                .unwrap_or_else(|| "Predictions need an initial refresh".into()),
+        );
+    }
     if !fresh {
         failures.push("Satellite health checks need refreshing".into());
-    }
-    if status["refresh_ok"] != true {
-        failures.push(
-            status["error"]
-                .as_str()
-                .unwrap_or("Predictions need an initial refresh")
-                .to_owned(),
-        );
     }
     if data.len() != 130720 || guard["output_sha256"].as_str() != Some(&digest) {
         failures.push("Prediction file is missing or does not match its health report".into());
@@ -448,8 +514,10 @@ fn data_info(config: &Config) -> DataInfo {
         decoded_rms: metrics["broadcast_approximation"]["rms_m"].as_f64(),
         propagation_seconds: metrics["total_seconds"].as_f64(),
         upload_allowed: guard["upload_allowed"] == true && failures.is_empty(),
+        refresh_error,
         failures,
         excluded,
+        excluded_prns: archive_exclusions(&data).unwrap_or_default(),
     }
 }
 
@@ -497,7 +565,63 @@ fn release_before_quit(shared: &Shared, activity: &mut CameraActivity, device: O
         release_storage(shared, device);
     }
 }
-fn upload(config: &Config, shared: &Shared, device: &Device, force: bool) -> Result<()> {
+/// Explicit updates may interrupt mounted storage once. Restore every volume
+/// even when preparation stops after unmounting only part of the card.
+fn manual_upload_with(
+    shared: &Shared,
+    device: &Device,
+    prepare: impl FnOnce(&Device) -> Result<Device>,
+    transfer: impl FnOnce(&Device) -> Result<()>,
+    restore: impl FnOnce(&Device) -> Result<()>,
+) {
+    set_phase(shared, Phase::Checking);
+    let mut started = false;
+    let result = prepare(device).and_then(|prepared| {
+        started = true;
+        transfer(&prepared)
+    });
+    let phase = shared.lock().unwrap().phase.clone();
+    set_phase(shared, Phase::RestoringStorage);
+    let restored = restore(device);
+    let mut s = shared.lock().unwrap();
+    s.phase = Phase::Idle;
+    s.storage_preparing = false;
+    if let Err(e) = result {
+        s.message = format!("GPS update failed: {e:#}");
+        if started && !camera::storage_in_use(&e) {
+            s.phase = Phase::Failed;
+            s.reconnect_required |= camera::requires_reconnect(&e) || phase.device_busy();
+        } else {
+            s.storage_error = Some(s.message.clone());
+        }
+    }
+    if let Err(e) = restored {
+        let error =
+            format!("Could not restore camera storage: {e:#}. Open the card in your file manager.");
+        s.message.push_str(&format!("\n{error}"));
+        s.storage_error = Some(error);
+    }
+}
+#[derive(Clone, Copy)]
+enum UploadKind {
+    Automatic,
+    Latest,
+    Again,
+}
+impl UploadKind {
+    fn should_transfer(self, state: &State) -> bool {
+        match self {
+            Self::Again => true,
+            Self::Latest => !state.matches_latest(),
+            Self::Automatic => !state.matches_latest() && state.automatic_upload_wait().is_none(),
+        }
+    }
+}
+fn upload(config: &Config, shared: &Shared, device: &Device, kind: UploadKind) -> Result<()> {
+    ensure!(
+        device.model.supports_gps(),
+        "This camera has no GPS receiver"
+    );
     {
         let s = shared.lock().unwrap();
         ensure!(
@@ -532,17 +656,19 @@ fn upload(config: &Config, shared: &Shared, device: &Device, force: bool) -> Res
             let mut s = shared.lock().unwrap();
             s.camera = Some(info.clone());
             s.camera_cached = false;
+            s.camera_note = None;
             s.receipt = receipts
                 .into_iter()
                 .rev()
-                .find(|r| r.camera_key.as_ref() == Some(&info.key));
+                .find(|r| r.camera_key.as_ref() == Some(&info.key))
+                .map(|r| hydrate_receipt(config, r));
             if let Some(receipt) = s.receipt.as_mut() {
                 // Link existing history only after a successful PTP identity
                 // query. This does not invent a new commit or change its time.
                 receipt.usb_key = device.serial_key.clone();
                 record(config, receipt)?;
             }
-            Ok(force || !s.matches_latest())
+            Ok(kind.should_transfer(&s))
         },
         |info| {
             let receipt = Receipt {
@@ -555,6 +681,7 @@ fn upload(config: &Config, shared: &Shared, device: &Device, force: bool) -> Res
                 committed_at: Utc::now(),
                 session_closed: false,
                 origin: "Rust desktop uploader".into(),
+                excluded_prns: archive_exclusions(&prepared.data),
             };
             {
                 let mut s = shared.lock().unwrap();
@@ -604,9 +731,12 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
         let mut refresh_requested = false;
         let mut upload_requested = false;
         let mut camera_refresh_requested = false;
+        let mut manual_refresh_key = None;
+        let mut manual_upload_key = None;
         let (refresh_tx, refresh_rx) = mpsc::channel();
         let mut refreshing = false;
         let mut refresh_interval = Duration::from_secs(3600);
+        let mut refresh_failures = 0u32;
         let mut last_scan = Instant::now() - Duration::from_secs(10);
         {
             let mut s = shared.lock().unwrap();
@@ -614,6 +744,10 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
             s.demo = config.demo;
             if let Ok(settings) = read_json(config.state_dir.join("settings.json")) {
                 s.automatic = settings["automatic"].as_bool().unwrap_or(true);
+                s.automatic_interval_hours = settings["automatic_interval_hours"]
+                    .as_u64()
+                    .filter(|h| (1..=168).contains(h))
+                    .unwrap_or(48) as u32;
             } else {
                 s.automatic = true;
             }
@@ -644,19 +778,37 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                     refresh_requested = true;
                 }
                 Ok(Action::Upload) => upload_requested = true,
+                Ok(Action::UpdateGps) if config.demo => demo_upload(&shared),
+                Ok(Action::UpdateGps) if !config.monitor_only => {
+                    let mut s = shared.lock().unwrap();
+                    if s.can_update_gps() {
+                        s.manual_update_pending = true;
+                        manual_refresh_key = Some(last_connection.clone());
+                        refresh_requested = true;
+                        s.message = "Checking the latest satellite data before updating GPS".into();
+                    }
+                }
                 Ok(Action::RefreshCamera) if config.demo => demo_refresh_camera(&shared),
                 Ok(Action::RefreshCamera) => camera_refresh_requested = true,
                 Ok(Action::SetAutomatic(enabled)) => {
-                    match atomic_json(
-                        &config.state_dir.join("settings.json"),
-                        &json!({"automatic":enabled}),
-                    ) {
+                    let hours = shared.lock().unwrap().upload_interval_hours();
+                    match save_upload_settings(&config, enabled, hours) {
                         Ok(()) => {
                             shared.lock().unwrap().automatic = enabled;
                         }
                         Err(e) => {
                             shared.lock().unwrap().message =
                                 format!("Could not save automatic update setting: {e:#}");
+                        }
+                    }
+                }
+                Ok(Action::SetUploadInterval(hours)) if (1..=168).contains(&hours) => {
+                    let automatic = shared.lock().unwrap().automatic;
+                    match save_upload_settings(&config, automatic, hours) {
+                        Ok(()) => shared.lock().unwrap().automatic_interval_hours = hours,
+                        Err(e) => {
+                            shared.lock().unwrap().message =
+                                format!("Could not save GPS upload interval: {e:#}")
                         }
                     }
                 }
@@ -683,15 +835,35 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
             if let Ok(result) = refresh_rx.try_recv() {
                 refreshing = false;
                 let result: Result<Value> = result;
-                refresh_interval = Duration::from_secs(if result.is_ok() { 3600 } else { 300 });
+                refresh_failures = if result.is_ok() {
+                    0
+                } else {
+                    refresh_failures.saturating_add(1)
+                };
                 let mut s = shared.lock().unwrap();
                 s.updating_sources = false;
                 s.source_progress = None;
                 s.data = data_info(&config);
+                let mut manual_already_latest = false;
+                if let Some(key) = manual_refresh_key.take() {
+                    manual_already_latest =
+                        result.is_ok() && s.data.upload_allowed && s.matches_latest();
+                    if result.is_ok() && s.data.upload_allowed && !manual_already_latest {
+                        manual_upload_key = Some(key);
+                    } else {
+                        s.manual_update_pending = false;
+                    }
+                }
+                refresh_interval =
+                    source_refresh_delay(refresh_failures, s.data.checked_gps, now_gps());
                 s.message = result
                     .err()
                     .map(|e| format!("Prediction refresh failed: {e:#}"))
                     .unwrap_or_else(|| "Satellite data and predictions are up to date".into());
+                if manual_already_latest {
+                    s.message =
+                        "This camera already has the latest predictions · no upload needed".into();
+                }
                 refresh_at = Instant::now();
             }
             if last_scan.elapsed() >= Duration::from_secs(2) {
@@ -709,6 +881,14 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 }
                 let mut s = shared.lock().unwrap();
                 if connection != last_connection {
+                    if !config.monitor_only
+                        && !refreshing
+                        && refresh_on_connection(device.as_ref(), &data_info(&config))
+                    {
+                        // A camera arriving during a failed refresh's backoff
+                        // gets an immediate check, without waiting for the timer.
+                        refresh_requested = true;
+                    }
                     if connection.is_empty() && !last_connection.is_empty() {
                         let _ = atomic_json(
                             &config.state_dir.join("attempt.json"),
@@ -718,13 +898,18 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                     s.camera = None;
                     s.camera_cached = false;
                     s.storage_error = None;
+                    s.camera_note = None;
                     if let Some(key) = device.as_ref().and_then(|d| d.serial_key.as_ref()) {
                         let receipts: Vec<Receipt> =
                             fs::read(config.state_dir.join("commits.json"))
                                 .ok()
                                 .and_then(|b| serde_json::from_slice(&b).ok())
                                 .unwrap_or_default();
-                        s.receipt = receipts.into_iter().rev().find(|r| r.matches_usb(key));
+                        s.receipt = receipts
+                            .into_iter()
+                            .rev()
+                            .find(|r| r.matches_usb(key))
+                            .map(|r| hydrate_receipt(&config, r));
                     }
                     if let Some(device) = device.as_ref() {
                         s.camera = cached_camera(&config, device);
@@ -750,11 +935,12 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 s.multiple_cameras = devices.len() > 1;
                 if s.multiple_cameras {
                     s.camera_error =
-                        Some("Multiple TG-1 cameras connected; connect one at a time".into());
+                        Some("Multiple supported cameras connected; connect one at a time".into());
                 }
                 last_scan = Instant::now();
             }
             let mut device = shared.lock().unwrap().device.clone();
+            let mut checked_8010 = false;
             camera_activity.observe(
                 &last_connection,
                 device.as_ref().is_some_and(|d| d.mounts.is_empty()),
@@ -769,9 +955,12 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 let s = shared.lock().unwrap();
                 !s.reconnect_required
                     && !s.multiple_cameras
-                    && (!s.automatic
+                    && (!s.gps_supported()
+                        || !s.automatic
                         || config.monitor_only
-                        || (!s.updating_sources && refresh_at.elapsed() < refresh_interval))
+                        || (!s.updating_sources
+                            && !refresh_requested
+                            && refresh_at.elapsed() < refresh_interval))
             };
             if initial_allowed
                 && let Some(current) = device.as_ref()
@@ -795,10 +984,13 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                         camera_activity.automatic_attempted = true;
                         camera_activity.probe_attempted = true;
                         release_storage(&shared, current);
-                        let mut s = shared.lock().unwrap();
-                        s.storage_error = Some(format!(
-                            "Initial camera check skipped: {e:#}. Storage will be left alone until the next connection."
-                        ));
+                        if storage::mounted_again(&e) {
+                            note_automatic_mount(&shared);
+                        } else {
+                            shared.lock().unwrap().storage_error = Some(format!(
+                                "Initial camera check skipped: {e:#}. Storage will be left alone until the next connection."
+                            ));
+                        }
                     }
                 }
             }
@@ -811,10 +1003,9 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 camera_activity.storage_released = true;
                 camera_activity.automatic_attempted = true;
                 camera_activity.probe_attempted = true;
-                let mut s = shared.lock().unwrap();
                 let message = "Storage mounted again before camera access; initial check skipped. Storage will be left alone until the next connection.";
                 eprintln!("ToughFix: {message}");
-                s.storage_error = Some(message.into());
+                note_automatic_mount(&shared);
             }
             {
                 let mut s = shared.lock().unwrap();
@@ -822,6 +1013,8 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                     !camera_activity.storage_released && !last_connection.is_empty();
             }
             if camera_refresh_requested {
+                checked_8010 = device.as_ref().is_some_and(|d| !d.model.supports_gps())
+                    && shared.lock().unwrap().can_refresh_camera();
                 camera_refresh_requested = false;
                 refresh_camera_with(
                     &config,
@@ -839,8 +1032,10 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 };
                 let status_only = {
                     let s = shared.lock().unwrap();
-                    !s.automatic
+                    !device.model.supports_gps()
+                        || !s.automatic
                         || config.monitor_only
+                        || s.automatic_upload_wait().is_some()
                         || (!s.updating_sources && s.data.upload_allowed && s.matches_latest())
                         || (!s.updating_sources
                             && !s.data.upload_allowed
@@ -852,6 +1047,7 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                     && camera_activity.take_probe(Instant::now())
                 {
                     set_phase(&shared, Phase::Checking);
+                    checked_8010 = !device.model.supports_gps();
                     eprintln!("ToughFix: reading initial camera health and battery");
                     match camera::probe(device) {
                         Ok(info) => {
@@ -881,7 +1077,25 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                     camera_activity.finished_access();
                 }
             }
+            // Our verified 8010 status check re-enumerates USB twice. Adopt the
+            // returned attachment without resetting the one-check allowance.
+            if checked_8010
+                && let Some(previous) = device.as_ref().filter(|d| !d.model.supports_gps())
+                && let Some(current) = camera::discover().into_iter().find(|d| {
+                    !d.model.supports_gps()
+                        && d.connection_key == previous.connection_key
+                        && d.serial_key == previous.serial_key
+                })
+                && let Some(connection) = camera::connection_identity(&current)
+            {
+                camera_activity.rebind_after_status_check(&connection);
+                last_connection = connection;
+                last_device = Some(current.clone());
+                shared.lock().unwrap().device = Some(current.clone());
+                device = Some(current);
+            }
             if !config.monitor_only
+                && shared.lock().unwrap().gps_supported()
                 && !refreshing
                 && !shared.lock().unwrap().phase.device_busy()
                 && (refresh_requested || refresh_at.elapsed() >= refresh_interval)
@@ -917,18 +1131,64 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 });
                 refresh_requested = false;
             }
+            {
+                let mut s = shared.lock().unwrap();
+                s.refresh_retry_seconds =
+                    (!config.monitor_only && !refreshing && refresh_failures > 0).then(|| {
+                        refresh_interval
+                            .saturating_sub(refresh_at.elapsed())
+                            .as_secs()
+                            .saturating_add(1)
+                    });
+            }
             if shared.lock().unwrap().quit_pending {
                 release_before_quit(&shared, &mut camera_activity, last_device.as_ref());
                 shared.lock().unwrap().stopped = true;
                 return;
             }
+            if let Some(key) = manual_upload_key.take() {
+                let current = {
+                    let s = shared.lock().unwrap();
+                    (!s.reconnect_required
+                        && !s.multiple_cameras
+                        && s.camera_error.is_none()
+                        && s.gps_supported()
+                        && s.data.upload_allowed
+                        && !s.phase.device_busy())
+                    .then(|| s.device.clone())
+                    .flatten()
+                };
+                if let Some(current) =
+                    current.filter(|d| camera::connection_identity(d).as_ref() == Some(&key))
+                {
+                    manual_upload_with(
+                        &shared,
+                        &current,
+                        storage::prepare,
+                        |prepared| upload(&config, &shared, prepared, UploadKind::Latest),
+                        storage::release,
+                    );
+                    camera_activity.storage_released = true;
+                    camera_activity.automatic_attempted = true;
+                    camera_activity.probe_attempted = true;
+                    camera_activity.finished_access();
+                    last_scan = Instant::now() - Duration::from_secs(3);
+                } else {
+                    shared.lock().unwrap().message = "Camera disconnected, changed or needs attention; press Update GPS now again after resolving it".into();
+                }
+                shared.lock().unwrap().manual_update_pending = false;
+            }
             let (auto, ready, already) = {
                 let s = shared.lock().unwrap();
                 (
                     s.automatic
+                        && s.gps_supported()
+                        && !s.manual_update_pending
+                        && s.automatic_upload_wait().is_none()
                         && !config.monitor_only
                         && camera_activity.automatic_due(Instant::now()),
                     s.data.upload_allowed
+                        && s.gps_supported()
                         && !s.updating_sources
                         && s.camera_error.is_none()
                         && !s.reconnect_required
@@ -949,7 +1209,16 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                         camera_activity.probe_attempted = true;
                         shared.lock().unwrap().message =
                             "Validating predictions before upload".into();
-                        match upload(&config, &shared, device, force) {
+                        match upload(
+                            &config,
+                            &shared,
+                            device,
+                            if force {
+                                UploadKind::Again
+                            } else {
+                                UploadKind::Automatic
+                            },
+                        ) {
                             Ok(()) => (),
                             Err(e) => {
                                 let mut s = shared.lock().unwrap();
@@ -1002,6 +1271,8 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
 
 fn demo_connection(shared: &Shared, connected: bool) {
     let mut s = shared.lock().unwrap();
+    s.camera_note = None;
+    s.storage_error = None;
     s.camera_cached = false;
     s.device = connected.then(|| Device {
         path: "/dev/demo-camera".into(),
@@ -1044,8 +1315,10 @@ fn demo_connection(shared: &Shared, connected: bool) {
         decoded_rms: Some(1.43),
         propagation_seconds: Some(43.1),
         upload_allowed: true,
+        refresh_error: None,
         failures: vec![],
         excluded: "G25".into(),
+        excluded_prns: vec![25],
     };
     s.message = if connected {
         "Demo camera connected"
@@ -1091,6 +1364,7 @@ fn demo_upload(shared: &Shared) {
         committed_at: Utc::now(),
         session_closed: true,
         origin: "Demo only · no camera write".into(),
+        excluded_prns: Some(s.data.excluded_prns.clone()),
     });
     s.phase = Phase::Idle;
     s.message = "Demo commit completed · no camera was written".into();
@@ -1116,6 +1390,247 @@ fn demo_refresh_camera(shared: &Shared) {
 
 #[cfg(test)]
 mod tests {
+    fn recent_camera_state() -> State {
+        let now = Utc::now();
+        let gps = crate::predictor::health::utc_gps(now).unwrap();
+        let date = |offset: i64| {
+            DateTime::from_timestamp((gps + 315964800.) as i64 + offset, 0)
+                .unwrap()
+                .format("%Y-%m-%dT%H:%M:%S")
+                .to_string()
+        };
+        State {
+            device: Some(Device {
+                serial_key: Some("camera".into()),
+                ..Default::default()
+            }),
+            receipt: Some(Receipt {
+                camera_key: Some("camera".into()),
+                usb_key: Some("camera".into()),
+                sha256: "old".into(),
+                bytes: 130720,
+                start_gps: date(-86400),
+                end_gps: date(13 * 86400),
+                committed_at: now - chrono::Duration::hours(6),
+                session_closed: true,
+                origin: "test".into(),
+                excluded_prns: Some(vec![25]),
+            }),
+            data: DataInfo {
+                sha256: "new".into(),
+                bytes: 130720,
+                excluded_prns: vec![25],
+                upload_allowed: true,
+                ..Default::default()
+            },
+            automatic: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn automatic_mount_skip_is_informational_and_does_not_change_the_snapshot() {
+        let at = Utc::now() - chrono::Duration::hours(3);
+        let mut state = State {
+            device: Some(Device {
+                model: crate::model::CameraModel::Tough8010,
+                mounts: vec!["/media/card".into()],
+                ..Default::default()
+            }),
+            camera: Some(CameraInfo {
+                read_at: Some(at),
+                battery: Some(100),
+                ..Default::default()
+            }),
+            camera_cached: true,
+            ..Default::default()
+        };
+        state.storage_error = Some("old warning".into());
+        let shared = Arc::new(Mutex::new(state));
+        note_automatic_mount(&shared);
+        let s = shared.lock().unwrap();
+        let activity = s.activity();
+        assert_eq!(activity.title, "Connected");
+        assert!(!activity.warning);
+        assert!(!activity.busy);
+        assert!(activity.detail.contains("ready for browsing"));
+        assert!(activity.detail.contains("refresh"));
+        assert!(s.storage_error.is_none());
+        assert!(s.can_refresh_camera());
+        assert_eq!(s.camera.as_ref().unwrap().read_at, Some(at));
+    }
+
+    #[test]
+    fn trip_update_bypasses_interval_but_identical_data_still_skips_flash() {
+        let mut s = recent_camera_state();
+        assert!(!UploadKind::Automatic.should_transfer(&s));
+        assert!(UploadKind::Latest.should_transfer(&s));
+        s.data.sha256 = "old".into();
+        assert!(!UploadKind::Automatic.should_transfer(&s));
+        assert!(!UploadKind::Latest.should_transfer(&s));
+        assert!(UploadKind::Again.should_transfer(&s));
+    }
+
+    #[test]
+    fn recent_commit_releases_storage_after_status_even_while_sources_refresh() {
+        let now = Instant::now();
+        let mut activity = CameraActivity::default();
+        activity.observe("usb", true, now);
+        activity.probe_attempted = true;
+        let mut s = recent_camera_state();
+        s.updating_sources = true;
+        assert!(activity.should_release(now + Duration::from_secs(3), &s));
+        s.data.excluded_prns.push(12);
+        assert!(!activity.should_release(now + Duration::from_secs(3), &s));
+    }
+
+    #[test]
+    fn upload_preferences_preserve_interval_toggle_and_unknown_fields() {
+        let temp = crate::test_support::Temp::new();
+        let config = Config {
+            project: temp.path().into(),
+            state_dir: temp.path().into(),
+            demo: false,
+            monitor_only: false,
+        };
+        atomic_json(
+            &temp.path().join("settings.json"),
+            &json!({"automatic":false,"future_setting":"keep"}),
+        )
+        .unwrap();
+        save_upload_settings(&config, false, 72).unwrap();
+        save_upload_settings(&config, true, 72).unwrap();
+        let settings = read_json(temp.path().join("settings.json")).unwrap();
+        assert_eq!(settings["automatic"], true);
+        assert_eq!(settings["automatic_interval_hours"], 72);
+        assert_eq!(settings["future_setting"], "keep");
+    }
+
+    #[test]
+    fn old_receipt_exclusions_are_recovered_only_from_the_exact_committed_archive() {
+        let temp = crate::test_support::Temp::new();
+        let config = Config {
+            project: temp.path().into(),
+            state_dir: temp.path().into(),
+            demo: false,
+            monitor_only: false,
+        };
+        let bytes = include_bytes!("../tests/fixtures/working-camera.cep");
+        let hash = camera::hash(bytes);
+        let dir = engine::root(temp.path()).join("archives");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{hash}.cep")), bytes).unwrap();
+        let mut r = recent_camera_state().receipt.unwrap();
+        r.sha256 = hash.clone();
+        r.excluded_prns = None;
+        let at = r.committed_at;
+        let linked = hydrate_receipt(&config, r.clone());
+        assert_eq!(linked.excluded_prns, Some(vec![25]));
+        assert_eq!(linked.committed_at, at);
+        fs::write(dir.join(format!("{hash}.cep")), vec![0; 130720]).unwrap();
+        assert!(hydrate_receipt(&config, r).excluded_prns.is_none());
+    }
+
+    #[test]
+    fn manual_gps_update_restores_card_on_partial_unmount_or_transfer_failure() {
+        use std::cell::RefCell;
+        for prepare_fails in [true, false] {
+            let shared = Arc::new(Mutex::new(recent_camera_state()));
+            let device = shared.lock().unwrap().device.clone().unwrap();
+            let calls = RefCell::new(Vec::new());
+            manual_upload_with(
+                &shared,
+                &device,
+                |d| {
+                    calls.borrow_mut().push("prepare");
+                    if prepare_fails {
+                        anyhow::bail!("Card is busy");
+                    }
+                    Ok(d.clone())
+                },
+                |_| {
+                    calls.borrow_mut().push("transfer");
+                    anyhow::bail!("Interrupted transfer");
+                },
+                |_| {
+                    calls.borrow_mut().push("restore");
+                    assert_eq!(shared.lock().unwrap().phase, Phase::RestoringStorage);
+                    Ok(())
+                },
+            );
+            assert_eq!(
+                *calls.borrow(),
+                if prepare_fails {
+                    vec!["prepare", "restore"]
+                } else {
+                    vec!["prepare", "transfer", "restore"]
+                }
+            );
+            let s = shared.lock().unwrap();
+            assert_eq!(s.receipt.as_ref().unwrap().sha256, "old");
+            assert_eq!(s.reconnect_required, !prepare_fails);
+            assert!(!s.storage_preparing);
+        }
+    }
+
+    #[test]
+    fn refresh_schedule_preserves_health_freshness_and_recovers_with_bounded_backoff() {
+        let checked = 1_474_926_000.;
+        let normal = source_refresh_delay(0, Some(checked), checked + 60.);
+        assert!(normal.as_secs_f64() + 60. < 3600.);
+        // Fitting took forty minutes: do not wait another half hour and expire.
+        assert_eq!(
+            source_refresh_delay(0, Some(checked), checked + 2400.),
+            Duration::from_secs(300)
+        );
+        assert_eq!(
+            source_refresh_delay(0, Some(checked), checked + 3601.),
+            Duration::ZERO
+        );
+        let retries: Vec<_> = (1..=8)
+            .map(|n| source_refresh_delay(n, Some(checked), checked + 7200.).as_secs())
+            .collect();
+        assert_eq!(retries, [30, 60, 120, 240, 300, 300, 300, 300]);
+        let mut data = DataInfo::default();
+        let mut device = Device::default();
+        assert!(refresh_on_connection(Some(&device), &data));
+        data.upload_allowed = true;
+        assert!(!refresh_on_connection(Some(&device), &data));
+        data.upload_allowed = false;
+        device.model = crate::model::CameraModel::Tough8010;
+        assert!(!refresh_on_connection(Some(&device), &data));
+        assert!(!refresh_on_connection(None, &data));
+    }
+
+    #[test]
+    fn mode_rebinding_preserves_one_check_budget_and_real_reconnect_resets_it() {
+        let mut activity = CameraActivity::default();
+        let now = Instant::now();
+        activity.observe("old", true, now);
+        let ready = now + Duration::from_secs(4);
+        assert!(activity.take_initial_preparation(ready));
+        assert!(activity.take_probe(ready));
+        let state = State {
+            device: Some(Device {
+                model: crate::model::CameraModel::Tough8010,
+                ..Default::default()
+            }),
+            automatic: true,
+            updating_sources: true,
+            ..Default::default()
+        };
+        assert!(activity.should_release(ready, &state));
+        activity.storage_released = true;
+        activity.finished_access();
+        activity.rebind_after_status_check("returned");
+        activity.observe("returned", true, ready);
+        assert!(!activity.take_initial_preparation(ready));
+        assert!(!activity.take_probe(ready));
+        activity.observe("reconnected", true, ready);
+        let ready_again = ready + Duration::from_secs(4);
+        assert!(activity.take_initial_preparation(ready_again));
+        assert!(activity.take_probe(ready_again));
+    }
     #[test]
     fn manual_refresh_restores_storage_and_preserves_commit_without_reopening_automatic_window() {
         let temp = crate::test_support::Temp::new();
@@ -1141,6 +1656,7 @@ mod tests {
             committed_at: at,
             session_closed: true,
             origin: "Previous upload".into(),
+            excluded_prns: None,
         };
         record(&config, &receipt).unwrap();
         let shared = Arc::new(Mutex::new(State {
@@ -1346,6 +1862,7 @@ mod tests {
                 committed_at: Utc::now(),
                 session_closed: true,
                 origin: String::new(),
+                excluded_prns: None,
             }),
             ..Default::default()
         };
@@ -1511,6 +2028,7 @@ mod tests {
             committed_at: Utc::now(),
             session_closed: false,
             origin: "Native Rust upload".into(),
+            excluded_prns: None,
         };
         record(&c, &receipt).unwrap();
         receipt.session_closed = true;

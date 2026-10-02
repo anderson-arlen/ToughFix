@@ -47,7 +47,13 @@ impl ksni::Tray for Tray {
     }
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
-            title: "ToughFix · Olympus TG-1".into(),
+            title: format!(
+                "ToughFix · {}",
+                self.state
+                    .device
+                    .as_ref()
+                    .map_or("Olympus Tough", |d| d.model.name())
+            ),
             description: format!(
                 "{}\n{}",
                 self.state.unplug_message(),
@@ -75,6 +81,7 @@ impl ksni::Tray for Tray {
             StandardItem {
                 label: "Refresh satellite checks".into(),
                 enabled: !self.state.updating_sources
+                    && self.state.gps_supported()
                     && !self.state.phase.device_busy()
                     && !self.state.demo,
                 activate: Box::new(|t: &mut Self| {
@@ -155,6 +162,7 @@ pub struct Manager {
 /// invalidate its cached snapshot, even when the upload phase stays Idle.
 #[derive(Debug, PartialEq)]
 struct UpdateKey {
+    camera_model: Option<&'static str>,
     phase: Phase,
     storage_preparing: bool,
     storage_error: bool,
@@ -168,6 +176,7 @@ struct UpdateKey {
 impl From<&State> for UpdateKey {
     fn from(state: &State) -> Self {
         Self {
+            camera_model: state.device.as_ref().map(|d| d.model.name()),
             phase: state.phase.clone(),
             storage_preparing: state.storage_preparing,
             storage_error: state.storage_error.is_some(),

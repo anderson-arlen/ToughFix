@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -59,7 +59,38 @@ pub struct Storage {
 }
 
 #[derive(Clone, Debug, Default)]
+pub enum CameraModel {
+    #[default]
+    Tg1,
+    Tough8010,
+}
+impl CameraModel {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Tg1 => "Olympus Tough TG-1",
+            Self::Tough8010 => "Olympus Stylus Tough-8010",
+        }
+    }
+    pub fn scsi_name(&self) -> &'static str {
+        match self {
+            Self::Tg1 => "TG-1",
+            Self::Tough8010 => "StylusTough-8010",
+        }
+    }
+    pub fn supports_gps(&self) -> bool {
+        matches!(self, Self::Tg1)
+    }
+    pub fn accepts_pid(&self, pid: &str) -> bool {
+        match self {
+            Self::Tg1 => pid == "012d",
+            Self::Tough8010 => matches!(pid, "0123" | "0124"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct Device {
+    pub model: CameraModel,
     pub path: PathBuf,
     pub sys_path: PathBuf,
     pub connection_key: String,
@@ -107,6 +138,8 @@ pub struct Receipt {
     pub committed_at: DateTime<Utc>,
     pub session_closed: bool,
     pub origin: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excluded_prns: Option<Vec<u8>>,
 }
 
 impl Receipt {
@@ -139,8 +172,10 @@ pub struct DataInfo {
     pub decoded_rms: Option<f64>,
     pub propagation_seconds: Option<f64>,
     pub upload_allowed: bool,
+    pub refresh_error: Option<String>,
     pub failures: Vec<String>,
     pub excluded: String,
+    pub excluded_prns: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -156,9 +191,13 @@ pub struct State {
     pub message: String,
     pub updating_sources: bool,
     pub source_progress: Option<crate::predictor::Progress>,
+    pub refresh_retry_seconds: Option<u64>,
     pub storage_preparing: bool,
     pub storage_error: Option<String>,
+    pub camera_note: Option<String>,
     pub automatic: bool,
+    pub automatic_interval_hours: u32,
+    pub manual_update_pending: bool,
     pub quit_pending: bool,
     pub stopped: bool,
     pub reconnect_required: bool,
@@ -174,6 +213,9 @@ pub struct Activity {
 }
 
 impl State {
+    pub fn gps_supported(&self) -> bool {
+        self.device.as_ref().is_none_or(|d| d.model.supports_gps())
+    }
     pub fn can_refresh_camera(&self) -> bool {
         self.device.is_some()
             && !self.phase.device_busy()
@@ -181,6 +223,59 @@ impl State {
             && !self.reconnect_required
             && !self.multiple_cameras
             && !self.quit_pending
+            && !self.manual_update_pending
+    }
+    pub fn can_update_gps(&self) -> bool {
+        self.device.is_some()
+            && self.gps_supported()
+            && !self.phase.device_busy()
+            && !self.updating_sources
+            && !self.manual_update_pending
+            && !self.reconnect_required
+            && !self.multiple_cameras
+            && !self.quit_pending
+    }
+    pub fn upload_interval_hours(&self) -> u32 {
+        match self.automatic_interval_hours {
+            1..=168 => self.automatic_interval_hours,
+            _ => 48,
+        }
+    }
+    /// Only a matching, acknowledged upload with known useful dates can defer
+    /// another write. New health exclusions and the last 48 hours of validity
+    /// take precedence over the user's minimum interval.
+    pub fn automatic_upload_wait_at(
+        &self,
+        now: DateTime<Utc>,
+        gps_now: f64,
+    ) -> Option<chrono::Duration> {
+        if !self.receipt_matches_camera() {
+            return None;
+        }
+        let receipt = self.receipt.as_ref()?;
+        let date = |s: &str| {
+            NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
+                .ok()
+                .map(|d| d.and_utc().timestamp() as f64 - 315964800.)
+        };
+        let start = date(&receipt.start_gps)?;
+        let end = date(&receipt.end_gps)?;
+        if !(start <= gps_now && gps_now < end - 48. * 3600.)
+            || self.data.excluded_prns.iter().any(|prn| {
+                !receipt
+                    .excluded_prns
+                    .as_ref()
+                    .is_some_and(|old| old.contains(prn))
+            })
+        {
+            return None;
+        }
+        let age = now.signed_duration_since(receipt.committed_at);
+        let interval = chrono::Duration::hours(self.upload_interval_hours() as i64);
+        (age >= chrono::Duration::zero() && age < interval).then_some(interval - age)
+    }
+    pub fn automatic_upload_wait(&self) -> Option<chrono::Duration> {
+        self.automatic_upload_wait_at(Utc::now(), now_gps())
     }
     pub fn activity(&self) -> Activity {
         let mut activity = Activity {
@@ -202,7 +297,9 @@ impl State {
                         transfer_bytes(total)
                     )
                 }
-                Phase::Checking => "Checking the camera and its GPS assistance update".into(),
+                Phase::Checking => {
+                    "Reading camera health, battery and storage · keep USB connected".into()
+                }
                 Phase::ReadingCamera => {
                     "Reading battery, health and SD card information · keep USB connected".into()
                 }
@@ -235,7 +332,7 @@ impl State {
             }
         } else if self.storage_preparing {
             activity.title = "Preparing your camera".into();
-            activity.detail = "Initial GPS and battery check · storage will mount afterward".into();
+            activity.detail = "Initial camera check · storage will mount afterward".into();
             activity.busy = true;
         } else if let Some(error) = self.storage_error.as_ref() {
             activity.title = "Camera storage needs attention".into();
@@ -251,13 +348,32 @@ impl State {
                 .clone()
                 .unwrap_or_else(|| self.message.clone());
             activity.warning = true;
-        } else if !self.data.failures.is_empty() {
-            activity.title = "GPS update unavailable".into();
-            activity.detail = self.data.failures[0].clone();
+        } else if self.gps_supported()
+            && (self.data.refresh_error.is_some() || !self.data.failures.is_empty())
+        {
+            activity.title = if self.data.refresh_error.is_some() {
+                "GPS refresh failed"
+            } else {
+                "GPS update unavailable"
+            }
+            .into();
+            let problem = self
+                .data
+                .refresh_error
+                .as_deref()
+                .map(refresh_problem)
+                .unwrap_or_else(|| self.data.failures[0].clone());
+            activity.detail = self.refresh_retry_seconds.map_or_else(
+                || problem.clone(),
+                |seconds| format!("{problem}\nRetrying automatically in {seconds} seconds."),
+            );
             activity.warning = true;
         } else if self.device.is_none() {
             activity.title = "Waiting for your camera".into();
-            activity.detail = "Connect an Olympus Tough TG-1 in USB Storage mode".into();
+            activity.detail = "Connect an Olympus TG-1 or Stylus Tough-8010".into();
+        } else if let Some(note) = self.camera_note.as_ref() {
+            activity.title = "Connected".into();
+            activity.detail = note.clone();
         } else if self.matches_latest() {
             activity.title = "Connected".into();
             activity.detail = "GPS assistance is up to date · no upload needed".into();
@@ -277,11 +393,11 @@ impl State {
         if self.phase.device_busy() {
             "Do not unplug the camera"
         } else if self.storage_preparing {
-            "Do not unplug · preparing GPS assistance; storage will mount afterward"
+            "Do not unplug · checking camera; storage will mount afterward"
         } else if self.reconnect_required {
             "Reconnect the camera before another update"
         } else if self.storage_mounted() {
-            "Camera storage in use · GPS updates paused · eject storage before unplugging"
+            "Camera storage mounted · eject storage before unplugging"
         } else {
             "No camera operation active"
         }
@@ -294,7 +410,8 @@ impl State {
                 .is_some_and(|r| !self.data.sha256.is_empty() && r.sha256 == self.data.sha256)
     }
     pub fn receipt_matches_camera(&self) -> bool {
-        self.device.is_some()
+        self.gps_supported()
+            && self.device.is_some()
             && self.receipt.as_ref().is_some_and(|r| {
                 if let Some(c) = self.camera.as_ref() {
                     r.camera_key.as_ref() == Some(&c.key)
@@ -308,6 +425,9 @@ impl State {
     }
 
     pub fn assistance_summary(&self) -> String {
+        if !self.gps_supported() {
+            return "This camera has no GPS receiver".into();
+        }
         if self.data.sha256.is_empty() || self.data.bytes == 0 {
             return if self.updating_sources {
                 "Preparing GPS predictions"
@@ -316,10 +436,13 @@ impl State {
             }
             .into();
         }
+        let wait = self.automatic_upload_wait();
         let status = if !self.data.upload_allowed {
             "Predictions are not cleared for upload"
         } else if self.matches_latest() {
             "Up to date on this camera"
+        } else if wait.is_some() {
+            "Camera predictions are recent enough"
         } else if self.device.is_none() {
             "Predictions ready to send"
         } else if self.receipt_matches_camera() {
@@ -327,26 +450,38 @@ impl State {
         } else {
             "Camera update status unverified"
         };
-        let validity = if self.data.end_gps.is_empty() {
+        let end = if wait.is_some() {
+            self.receipt
+                .as_ref()
+                .map_or(self.data.end_gps.as_str(), |r| r.end_gps.as_str())
+        } else {
+            self.data.end_gps.as_str()
+        };
+        let validity = if end.is_empty() {
             String::new()
         } else {
-            format!(
-                "\nPredictions valid until {}",
-                self.data.end_gps.get(..10).unwrap_or(&self.data.end_gps)
-            )
+            format!("\nPredictions valid until {}", end.get(..10).unwrap_or(end))
         };
-        let next = if self.device.is_some()
+        let next = if self.automatic
+            && !self.matches_latest()
+            && let Some(wait) = wait
+        {
+            format!(
+                "\nNext automatic upload in about {} h, on connection.",
+                (wait.num_seconds() + 3599) / 3600
+            )
+        } else if self.device.is_some()
             && self.data.upload_allowed
             && !self.matches_latest()
             && self.storage_mounted()
         {
             if self.automatic {
-                "\nEject storage and reconnect USB to check GPS."
+                "\nUse Update GPS now, or reconnect USB for an automatic update.".into()
             } else {
-                "\nAutomatic updates are off · enable them in Settings."
+                "\nAutomatic updates are off · use Update GPS now.".into()
             }
         } else {
-            ""
+            String::new()
         };
         format!("{status}{validity}{next}")
     }
@@ -359,7 +494,9 @@ pub enum Action {
     Refresh,
     RefreshCamera,
     Upload,
+    UpdateGps,
     SetAutomatic(bool),
+    SetUploadInterval(u32),
     DemoConnect(bool),
     DemoUpload,
 }
@@ -402,6 +539,48 @@ pub fn now_gps() -> f64 {
     crate::predictor::health::now().unwrap_or(f64::NAN)
 }
 
+fn refresh_problem(error: &str) -> String {
+    if let Some(errors) = error
+        .strip_prefix("Earth-orientation downloads failed (IERS: ")
+        .and_then(|s| s.strip_suffix(')'))
+        && let Some((iers, usno)) = errors.split_once("; USNO: ")
+    {
+        return format!(
+            "Earth-orientation download failed. IERS: {}. USNO: {}.",
+            download_problem(iers),
+            download_problem(usno)
+        );
+    }
+    let source = [
+        ("datacenter.iers.org", "IERS Earth-orientation"),
+        ("maia.usno.navy.mil", "USNO Earth-orientation"),
+        (
+            "noaa-cors-pds.s3.amazonaws.com",
+            "NOAA satellite-observation",
+        ),
+        ("navcen.uscg.gov", "US Coast Guard satellite-health"),
+        ("earth-info.nga.mil", "NGA gravity-model"),
+    ]
+    .into_iter()
+    .find_map(|(host, name)| error.contains(host).then_some(name));
+    let Some(source) = source else {
+        return error.into();
+    };
+    format!("{source} download failed: {}.", download_problem(error))
+}
+
+fn download_problem(error: &str) -> &str {
+    if error.contains("Connection reset by peer") {
+        "the connection was reset"
+    } else if error.contains("timed out") {
+        "the request timed out"
+    } else if error.contains("dns error") || error.contains("failed to lookup address") {
+        "the server could not be reached"
+    } else {
+        error.rsplit(": ").next().unwrap_or(error)
+    }
+}
+
 pub fn gps_calendar(gps: f64) -> String {
     DateTime::from_timestamp((gps + 315964800.) as i64, 0)
         .map(|d| d.format("%Y-%m-%d %H:%M GPS").to_string())
@@ -410,6 +589,182 @@ pub fn gps_calendar(gps: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn download_failure_identifies_source_cause_and_automatic_resolution() {
+        let error = "Downloading https://maia.usno.navy.mil/ser7/finals2000A.all: client error (Connect): Connection reset by peer (os error 104)";
+        let mut state = State {
+            data: DataInfo {
+                refresh_error: Some(error.into()),
+                // A generic guard warning must not hide the real source error.
+                failures: vec![
+                    "Satellite health checks need refreshing".into(),
+                    error.into(),
+                ],
+                ..Default::default()
+            },
+            refresh_retry_seconds: Some(30),
+            ..Default::default()
+        };
+        let activity = state.activity();
+        assert_eq!(activity.title, "GPS refresh failed");
+        assert!(activity.detail.contains("USNO Earth-orientation"));
+        assert!(activity.detail.contains("connection was reset"));
+        assert!(
+            activity
+                .detail
+                .contains("Retrying automatically in 30 seconds")
+        );
+        assert!(!activity.detail.contains("health checks need refreshing"));
+        assert!(activity.warning);
+        state.updating_sources = true;
+        assert!(state.activity().busy);
+        assert!(!state.activity().warning);
+    }
+
+    fn recent_upload(now: DateTime<Utc>) -> State {
+        let gps = crate::predictor::health::utc_gps(now).unwrap();
+        let date = |offset: i64| {
+            DateTime::from_timestamp((gps + 315964800.) as i64 + offset, 0)
+                .unwrap()
+                .format("%Y-%m-%dT%H:%M:%S")
+                .to_string()
+        };
+        State {
+            device: Some(Device {
+                serial_key: Some("camera-a".into()),
+                ..Default::default()
+            }),
+            data: DataInfo {
+                sha256: "new".into(),
+                bytes: 130720,
+                upload_allowed: true,
+                excluded_prns: vec![25],
+                ..Default::default()
+            },
+            receipt: Some(Receipt {
+                camera_key: Some("camera-a".into()),
+                usb_key: Some("camera-a".into()),
+                sha256: "old".into(),
+                bytes: 130720,
+                start_gps: date(-86400),
+                end_gps: date(13 * 86400),
+                committed_at: now - chrono::Duration::hours(6),
+                session_closed: true,
+                origin: "test".into(),
+                excluded_prns: Some(vec![25]),
+            }),
+            automatic: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn automatic_upload_cooldown_uses_confirmed_camera_commit_and_exact_boundary() {
+        let now = Utc::now();
+        let gps = crate::predictor::health::utc_gps(now).unwrap();
+        let mut s = recent_upload(now);
+        assert_eq!(s.upload_interval_hours(), 48);
+        assert_eq!(
+            s.automatic_upload_wait_at(now, gps),
+            Some(chrono::Duration::hours(42))
+        );
+        let receipt = s.receipt.as_mut().unwrap();
+        receipt.committed_at = now - chrono::Duration::hours(48) + chrono::Duration::seconds(1);
+        assert_eq!(
+            s.automatic_upload_wait_at(now, gps),
+            Some(chrono::Duration::seconds(1))
+        );
+        s.receipt.as_mut().unwrap().committed_at -= chrono::Duration::seconds(1);
+        assert!(s.automatic_upload_wait_at(now, gps).is_none());
+        s.automatic_interval_hours = 168;
+        assert_eq!(
+            s.automatic_upload_wait_at(now, gps),
+            Some(chrono::Duration::hours(120))
+        );
+        s.automatic_interval_hours = 999;
+        assert_eq!(s.upload_interval_hours(), 48);
+    }
+
+    #[test]
+    fn urgency_identity_unknown_dates_and_clock_changes_override_cooldown() {
+        let now = Utc::now();
+        let gps = crate::predictor::health::utc_gps(now).unwrap();
+        let original = recent_upload(now);
+        let mut s = original.clone();
+        s.device.as_mut().unwrap().serial_key = Some("other-camera".into());
+        assert!(s.automatic_upload_wait_at(now, gps).is_none());
+        s = original.clone();
+        s.receipt.as_mut().unwrap().end_gps.clear();
+        assert!(s.automatic_upload_wait_at(now, gps).is_none());
+        s = original.clone();
+        s.receipt.as_mut().unwrap().committed_at = now + chrono::Duration::minutes(1);
+        assert!(s.automatic_upload_wait_at(now, gps).is_none());
+        s = original.clone();
+        s.data.excluded_prns.push(12);
+        assert!(s.automatic_upload_wait_at(now, gps).is_none());
+        s = original.clone();
+        s.receipt.as_mut().unwrap().excluded_prns = None;
+        assert!(s.automatic_upload_wait_at(now, gps).is_none());
+        s = original.clone();
+        // At exactly 48 hours remaining, expiry takes priority over even a week-long setting.
+        s.automatic_interval_hours = 168;
+        assert!(
+            s.automatic_upload_wait_at(now, gps + 11. * 86400.)
+                .is_none()
+        );
+        s = original;
+        s.receipt = None;
+        assert!(s.automatic_upload_wait_at(now, gps).is_none());
+    }
+
+    #[test]
+    fn cooldown_summary_uses_camera_dates_and_manual_update_allows_mounted_storage() {
+        let mut s = recent_upload(Utc::now());
+        s.data.end_gps = "2099-01-01T00:00:00".into();
+        s.device.as_mut().unwrap().mounts.push("/media/card".into());
+        let summary = s.assistance_summary();
+        assert!(summary.contains("recent enough"));
+        assert!(summary.contains("Next automatic upload"));
+        assert!(!summary.contains("2099"));
+        assert!(s.can_update_gps());
+        s.manual_update_pending = true;
+        assert!(!s.can_update_gps());
+        assert!(!s.can_refresh_camera());
+    }
+
+    #[test]
+    fn mirror_failure_preserves_both_causes_in_the_summary() {
+        let error = "Earth-orientation downloads failed (IERS: Downloading https://datacenter.iers.org/products/eop/rapid/standard/finals2000A.all: operation timed out; USNO: Downloading https://maia.usno.navy.mil/ser7/finals2000A.all: Connection reset by peer (os error 104))";
+        assert_eq!(
+            refresh_problem(error),
+            "Earth-orientation download failed. IERS: the request timed out. USNO: the connection was reset."
+        );
+    }
+
+    #[test]
+    fn non_gps_camera_does_not_claim_an_update_or_surface_prediction_errors() {
+        let mut state = State {
+            device: Some(Device {
+                model: CameraModel::Tough8010,
+                mounts: vec!["/media/card".into()],
+                ..Default::default()
+            }),
+            data: DataInfo {
+                failures: vec!["Missing predictions".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!state.gps_supported());
+        assert!(!state.matches_latest());
+        assert_eq!(state.activity().title, "Connected");
+        assert_eq!(
+            state.assistance_summary(),
+            "This camera has no GPS receiver"
+        );
+        state.device = None;
+        assert!(state.gps_supported());
+    }
     #[test]
     fn snapshot_age_tracks_elapsed_time_and_manual_refresh_requires_an_idle_camera() {
         let at = Utc::now();
@@ -481,6 +836,7 @@ mod tests {
                 committed_at: Utc::now(),
                 session_closed: true,
                 origin: String::new(),
+                excluded_prns: None,
             }),
             automatic: true,
             ..Default::default()
@@ -625,6 +981,7 @@ mod tests {
             committed_at: Utc::now(),
             session_closed: true,
             origin: String::new(),
+            excluded_prns: None,
         });
         assert!(!s.matches_latest());
         s.receipt.as_mut().unwrap().camera_key = Some("a".into());

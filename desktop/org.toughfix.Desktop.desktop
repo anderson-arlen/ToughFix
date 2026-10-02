@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=ToughFix
-Comment=Olympus TG-1 GPS assistance and camera status
+Comment=Olympus Tough camera status and TG-1 GPS assistance
 Exec=/usr/bin/toughfix
 Icon=toughfix
 Terminal=false

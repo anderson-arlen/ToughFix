@@ -69,7 +69,7 @@ fn launcher(binary: &Path, config: &Path) -> Result<Vec<u8>> {
         !text(binary)?.contains('='),
         "Desktop executable path cannot contain ="
     );
-    Ok(format!("[Desktop Entry]\nType=Application\nName=ToughFix\nComment=Olympus TG-1 GPS assistance and camera status\nExec=/usr/bin/env -- {} --config-dir {}\nIcon=toughfix\nTerminal=false\nCategories=Utility;\nStartupNotify=true\nDBusActivatable=false\n",desktop_arg(binary)?,desktop_arg(config)?).into_bytes())
+    Ok(format!("[Desktop Entry]\nType=Application\nName=ToughFix\nComment=Olympus Tough camera status and TG-1 GPS assistance\nExec=/usr/bin/env -- {} --config-dir {}\nIcon=toughfix\nTerminal=false\nCategories=Utility;\nStartupNotify=true\nDBusActivatable=false\n",desktop_arg(binary)?,desktop_arg(config)?).into_bytes())
 }
 fn service(binary: &Path, config: &Path) -> Result<Vec<u8>> {
     Ok(format!("[Unit]\nDescription=ToughFix camera connection\nRequisite=graphical-session.target\nAfter=graphical-session.target\nPartOf=graphical-session.target\nConditionUser=!root\nConditionEnvironment=|DISPLAY\nConditionEnvironment=|WAYLAND_DISPLAY\n\n[Service]\nType=exec\nExecCondition=/usr/bin/test ! -e {}\nExecStart=/usr/bin/env -- {} --config-dir {} --background --hotplug\nExecStopPost=-/usr/bin/env -- {} storage-release\nRestart=no\n",service_arg(&config.join("toughfix/camera-start-disabled"))?,service_arg(binary)?,service_arg(config)?,service_arg(binary)?).into_bytes())

@@ -8,6 +8,9 @@ in. A window and system tray show camera status, prediction freshness, and
 upload progress. The app and installer are written in Rust; neither Olympus's
 updater nor any outside prediction service is needed.
 
+The Olympus Stylus Tough-8010 is also supported for battery, firmware, and
+storage status. It has no GPS receiver and receives no assistance updates.
+
 ![ToughFix dashboard showing camera status and GPS assistance](docs/screenshot.png)
 
 ## Why this exists
@@ -57,9 +60,9 @@ make install
 
 The same command installs updates. It builds the locked release and installs
 the binary, icon, application-menu entry, and camera-triggered user service.
-The first camera-access setup asks for sudo to install a TG-1-specific udev
-rule and load the Linux `sg` driver. Subsequent camera connections and normal
-app updates do not require sudo once that setup is in place.
+Camera-access setup asks for sudo to install narrowly matched udev rules and
+load the Linux `sg` driver. Normal camera connections require no sudo. Adding
+support for a new model may require updating those rules once during installation.
 **Do not run `sudo make install`.**
 
 1. Reconnect the camera after installation and choose **USB Storage** mode.
@@ -115,13 +118,28 @@ hint, ToughFix requests one normal unmount at startup. A busy card cancels that
 connection's initial check; no forced unmount or periodic retry occurs. A card
 mounted again after preparation is also left alone until the next connection.
 
-Inputs refresh at startup and hourly while the app is running; failures retry
-after five minutes. A new full forecast took **about 40 seconds** with four
+Inputs refresh at startup and every 30 minutes while the app is running,
+before the one-hour satellite-health check expires. Download failures identify
+the source and cause in the status banner, with an automatic retry countdown.
+Retries start after 30 seconds and back off to five minutes; connecting a GPS
+camera with unavailable data starts a fresh attempt immediately. A new full
+forecast took **about 40 seconds** with four
 workers on a Threadripper 2950X, excluding downloads. Unchanged inputs reuse
-the forecast. Each USB connection permits one automatic upload; further updates
-during a long connection use the upload button after unmounting storage.
-**Refresh satellite data** refreshes predictions without repeating camera status
-queries. No Python, virtual environment, or source checkout is needed
+the forecast. Automatic camera uploads default to a **48-hour minimum interval** since that
+camera's last confirmed commit, adjustable from 1–168 hours in Settings. New
+satellite exclusions or less than 48 hours of remaining assistance validity
+bypass the interval. Identical assistance files are always skipped automatically.
+Satellite observations and local predictions keep refreshing independently of
+camera writes. Each USB connection permits at most one automatic upload;
+subsequent refreshes leave mounted storage alone.
+
+**Update GPS now** checks the latest satellite inputs and updates the connected
+TG-1 regardless of the interval, useful before a trip. It briefly unmounts storage
+and restores it afterward; a busy card is left alone. If the camera already has
+the latest file, no flash write is needed. The adjacent refresh icon updates only
+local satellite data and predictions. **Upload again** in Advanced explicitly
+rewrites the current file. An initial check skipped because storage mounted
+again is shown as neutral information, with the existing snapshot's age visible. No Python, virtual environment, or source checkout is needed
 by the installed application.
 
 For custom paths, installation without system setup, or desktops with a different
@@ -181,7 +199,7 @@ from a worldwide network to produce precise satellite orbit and clock products.
 | --- | --- | --- |
 | Observed GPS positions and clocks | IGS products distributed through [NOAA's public archive](https://www.ngs.noaa.gov/CORS/data.shtml) | Three days of 15-minute observations: Rapid preferred on overlap, observed Ultra-rapid extends the arc; also used for health checks |
 | Earth's gravity field | [NGA EGM96](https://earth-info.nga.mil/index.php?dir=wgs84&action=wgs84) | Gravity coefficients through degree and order 8 |
-| Earth orientation | [US Naval Observatory](https://maia.usno.navy.mil/) | Polar motion and UT1−UTC for Earth-fixed/inertial transformations |
+| Earth orientation | [IERS official mirror](https://datacenter.iers.org/products/eop/rapid/standard/), with [USNO](https://maia.usno.navy.mil/) as backup | The same `finals2000A.all` polar-motion and UT1−UTC data for Earth-fixed/inertial transformations |
 | Satellite health and maneuver notices | [US Coast Guard NAVCEN](https://www.navcen.uscg.gov/gps-nanus-almanacs-opsadvisories-sof) | Outage, maintenance, and maneuver quarantine |
 
 NOAA distributes the orbit products; it is not their sole producer. Predicted
@@ -192,7 +210,7 @@ for its gravity coefficient text; its included programs are never run.
 ```mermaid
 flowchart TD
     O["NOAA / IGS observed GPS positions and clocks"] --> F["Fit a model to three days of past observations"]
-    E["USNO Earth orientation + NGA gravity"] --> F
+    E["IERS / USNO Earth orientation + NGA gravity"] --> F
     F --> P["Propagate satellite orbits and clocks for 14 days"]
     P --> C["Fit six-hour ephemerides and encode CEP"]
     C --> V["Decode independently; check ranges, CRCs and numerical agreement"]
@@ -387,9 +405,18 @@ The dashboard's last commit is an acknowledged, camera-associated receipt.
 what the camera acknowledged committing; it cannot prove the file is still present
 after a later camera reset or battery removal.
 
-Only the **Olympus TG-1** is currently supported. Static format analysis used
+GPS assistance is supported for the **Olympus TG-1**. Static format analysis used
 TG-1 firmware 1.1; the documented successful camera trial used firmware 1.00.
 Other Tough models and GPS chipsets may use different formats or protocols.
+
+The **Olympus Stylus Tough-8010**, tested with firmware 1.00, supports battery,
+firmware, and storage information. ToughFix briefly switches its USB interface
+from ordinary storage to the camera's telemetry mode, reads its status, and
+returns it to ordinary storage. This round trip has been verified on hardware
+and requires no camera-menu changes. It runs once on connection, or when the
+camera refresh button is pressed; there is no periodic status polling. A busy
+mounted filesystem is left alone. USB charging-state telemetry is not confirmed;
+the battery percentage is a timestamped reading, not a live charging meter.
 
 ## CEP file format
 
@@ -600,7 +627,7 @@ Original ToughFix code, documentation, and generated figures are
 terms; see [NOTICE.md](NOTICE.md). Vendor firmware and Nikon assistance files
 are not included or required by the application.
 
-ToughFix builds on public IGS products, NOAA distribution, USNO Earth orientation,
+ToughFix builds on public IGS products, NOAA distribution, IERS/USNO Earth orientation,
 NGA gravity, NAVCEN notices, ERFA, and the open-source Rust numerical and desktop
 libraries. Earlier community documentation in the
 [CHDK discussion of Olympus firmware decoding](https://chdk.setepontos.com/d/2471-olympus-emjustylus-series-fw-analysis)

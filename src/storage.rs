@@ -167,6 +167,17 @@ fn unmount_volumes(device: &Device, client: &mut impl MountClient) -> Result<()>
 
 /// Called at most once per USB attachment. A busy card or an automount race
 /// cancels the initial check; the transport independently rechecks mount state.
+#[derive(Debug)]
+struct StorageRemounted;
+impl std::fmt::Display for StorageRemounted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Camera storage mounted automatically before the initial check")
+    }
+}
+impl std::error::Error for StorageRemounted {}
+pub fn mounted_again(error: &anyhow::Error) -> bool {
+    error.is::<StorageRemounted>()
+}
 pub fn prepare(device: &Device) -> Result<Device> {
     let attachment = camera::connection_identity(device).context("Camera disconnected")?;
     let current = camera::discover_checked()?
@@ -181,14 +192,24 @@ pub fn prepare(device: &Device) -> Result<Device> {
         .into_iter()
         .find(|d| camera::connection_identity(d).as_ref() == Some(&attachment))
         .context("Camera disconnected")?;
-    ensure!(
-        current.mounts.is_empty(),
-        "Camera storage was mounted again; initial check skipped"
-    );
+    if !current.mounts.is_empty() {
+        return Err(StorageRemounted.into());
+    }
     Ok(current)
 }
 
 pub fn release(device: &Device) -> Result<()> {
+    if !device.model.supports_gps() {
+        let usb = device
+            .sys_path
+            .ancestors()
+            .find(|p| p.join("idProduct").is_file())
+            .context("Camera disconnected")?;
+        ensure!(
+            fs::read_to_string(usb.join("idProduct"))?.trim() == "0124",
+            "Camera control mode is still active; reconnect USB to restore storage"
+        );
+    }
     let attachment = camera::connection_identity(device).context("Camera disconnected")?;
     let bus = gio::bus_get_sync(gio::BusType::System, None::<&gio::Cancellable>)?;
     let mut client = UDisks(bus);

@@ -6,3 +6,10 @@ SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ATTRS{idVendor}=="07b4", ATTRS{idProdu
 SUBSYSTEM=="scsi_generic", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="012d", TAG+="uaccess"
 # Start only the desktop user's service, after the SG endpoint is available.
 SUBSYSTEM=="scsi_generic", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="012d", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="toughfix-camera.service"
+
+# Stylus Tough-8010: ordinary storage (0124) and temporary telemetry (0123).
+# Match the model as these product IDs are shared with other Olympus cameras.
+SUBSYSTEM=="block", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="012[34]", ATTRS{product}=="StylusTough-8010", ENV{UDISKS_AUTO}="0"
+SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="012[34]", ATTRS{product}=="StylusTough-8010", TAG+="uaccess"
+SUBSYSTEM=="scsi_generic", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="012[34]", ATTRS{product}=="StylusTough-8010", TAG+="uaccess"
+SUBSYSTEM=="scsi_generic", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="0124", ATTRS{product}=="StylusTough-8010", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="toughfix-camera.service"

@@ -16,7 +16,7 @@ _toughfix_reload() {
 post_install() {
   _toughfix_reload
   modprobe sg || true
-  printf 'Reconnect your TG-1 in USB Storage mode to activate ToughFix.\n'
+  printf 'Reconnect your TG-1 or Stylus Tough-8010 in USB Storage mode to activate ToughFix.\n'
 }
 post_upgrade() {
   post_install

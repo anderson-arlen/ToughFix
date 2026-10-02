@@ -120,6 +120,17 @@ def main():
                                '--object-path', '/MenuBar', '--method',
                                'com.canonical.dbusmenu.GetLayout', '0', '1', "['label']")
 
+            action('demo-8010')
+            until(lambda: 'Stylus Tough-8010' in tray_property('ToolTip'))
+            print('PASS: non-GPS camera identity reaches the real tray')
+            action('demo-auto-mounted')
+            until(lambda: 'Active' in tray_property('Status'))
+            assert not busy()
+            print('PASS: automatic mounting is neutral and does not request tray attention')
+            # Restore the TG-1 demo for the GPS upload checks below.
+            action('demo-connect')
+            until(lambda: 'Tough TG-1' in tray_property('ToolTip'))
+
             idle_icon = tray_property('IconPixmap')
             action('demo-preparing')
             until(busy)
@@ -145,7 +156,7 @@ def main():
             until(lambda: not busy())
             print('PASS: explicit camera refresh protects the read/remount operation')
 
-            action('upload')
+            action('update-gps')
             until(busy)
             status = command('gdbus', 'call', '--session', '--dest', destination,
                              '--object-path', '/' + path, '--method',

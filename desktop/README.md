@@ -2,7 +2,7 @@
 
 The Rust application uses GTK 4 with Libadwaita for the window and StatusNotifierItem (`ksni`)
 for the tray. It supports Wayland/X11 desktops with a tray host, including
-Hyprland with Waybar. The tray exists only while an Olympus TG-1 is connected
+Hyprland with Waybar. The tray exists only while a supported Olympus camera is connected
 in USB Storage mode. Left-click opens the window; its menu offers Open and
 Quit. Without a tray host, the window opens and explains the issue.
 
@@ -15,9 +15,10 @@ dots, and last confirmed update. The illustration pauses when hidden and
 respects the desktop animation preference. Idle connection status
 appears only in the activity panel. **Camera**, **Advanced**, and **Settings**
 are tabs in one window; **Settings** contains the
-startup and automatic-update preferences. **Refresh satellite data** in the
-GPS assistance section refreshes observations and predictions; manual upload
-controls are in **Advanced**. The refresh icon beside the snapshot age reads a new
+startup, automatic-update and upload-interval preferences. **Update GPS now** in
+the GPS assistance section refreshes inputs and updates the camera; its adjacent
+refresh icon updates only local observations and predictions. **Advanced**
+retains the explicit rewrite control. The refresh icon beside the snapshot age reads a new
 battery, health and SD-card snapshot without uploading GPS data. It briefly
 unmounts and remounts the card; a busy card is left alone. Snapshot age appears
 beside health and beneath the battery gauge, and advances while the window is open.
@@ -95,7 +96,7 @@ An already running version remains active until you quit and reopen it.
 Use the application menu to launch it, or `~/.local/bin/toughfix` if that
 directory is not in your shell's PATH.
 
-The first camera setup prompts for sudo to install the TG-1-specific udev rule
+Camera setup prompts for sudo to install model-specific udev rules
 and `/etc/modules-load.d/toughfix.conf`, load the `sg` driver, and reload udev
 rules. The rule asks systemd to start your user service when the camera enters
 USB Storage mode, using [SYSTEMD_USER_WANTS](https://raw.githubusercontent.com/systemd/systemd/main/man/systemd.device.xml);
@@ -172,7 +173,7 @@ overrides `$XDG_STATE_HOME/toughfix` or `~/.local/state/toughfix`.
 pass their configured path.
 
 The supplied `70-toughfix.rules` grants the active local desktop user access
-only to the matching whole TG-1 disk and its SCSI generic endpoint. The installer
+only to matching TG-1 and Stylus Tough-8010 disks and SCSI generic endpoints. The installer
 sets it up. Without access,
 the dashboard explains the permission issue and blocks uploads.
 
@@ -185,13 +186,17 @@ No Windows updater or firmware is executed.
 When ToughFix starts normally, it refreshes official satellite notices and
 observations, generates new orbit/clock predictions when the fitted inputs
 change, independently decodes the quantized CEP, applies maneuver/outage
-quarantine, and publishes an eligible candidate atomically. This repeats hourly
-while the app is running; failures retry after five minutes. Downloads and
+quarantine, and publishes an eligible candidate atomically. This repeats every
+30 minutes while the app is running, earlier if needed to keep health checks
+fresh. Failures show their source, cause, and next automatic retry in the status
+banner. Retries start after 30 seconds and back off to five minutes; connecting
+a GPS camera with unavailable data requests an immediate attempt. Downloads and
 computation run separately from the camera monitor and GTK thread.
 
-A connected camera automatically receives a changed eligible file when
+A connected camera automatically receives a changed eligible file, normally no more
+than once every 48 hours since its last confirmed commit, when
 **Update automatically when connected** is enabled (the default). The
-TG-1-specific udev rule sets [UDISKS_AUTO](https://storaged.org/udisks/docs/udisks.8.html)
+model-specific udev rules set [UDISKS_AUTO](https://storaged.org/udisks/docs/udisks.8.html)
 to hold desktop automount while this initial update runs. Once it finishes,
 ToughFix mounts the card through UDisks2, ready for browsing. If storage has
 already mounted, ToughFix requests one normal unmount during this initial
@@ -225,6 +230,19 @@ UDisks authorization, without sudo or an authentication prompt. If automatic
 mounting fails, the dashboard reports it and the card can be opened manually
 in a file manager.
 
+Settings provides a 1–168-hour minimum interval between automatic camera uploads
+(default 48 hours). This is measured from confirmed commits to the matching
+camera. Less than 48 hours of remaining validity or new satellite exclusions
+bypass the interval. Old receipts recover their exclusions from the exact
+hash-verified local archive when available; uncertain health history never
+postpones a necessary update.
+
+**Update GPS now** fetches current inputs before uploading, ignores the interval,
+and skips identical data. It performs one normal unmount and restores the card
+on success or failure; it never forces a busy filesystem. A queued update is
+cancelled if the camera changes or disconnects. Advanced retains **Upload again**
+for an explicit rewrite.
+
 Disabling automatic uploads still permits data
 refresh and manual uploads. **Refresh satellite data** runs the complete data
 and prediction pipeline; it does not repeat camera queries. A hidden
@@ -235,7 +253,7 @@ running if you want ongoing refreshes.
 
 Health uses the full current-year Coast Guard NANU archive and retained prior
 references, the operational advisory, NOAA observed rapid/ultra-rapid GPS SP3
-samples, USNO Earth orientation, and pinned NGA EGM96. Predicted SP3 positions
+samples, IERS Earth orientation (with USNO as backup), and pinned NGA EGM96. Predicted SP3 positions
 and clocks are never fitted. Rapid observations take priority on overlap;
 observed Ultra-rapid data extend the three-day arc. Each satellite's clocks
 pass separate residual gates or fall back to a recent Rapid fit; the dashboard

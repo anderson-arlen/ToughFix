@@ -18,14 +18,33 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const NAVCEN: &str = "https://www.navcen.uscg.gov/sites/default/files/gps/";
 const NOAA: &str = "https://noaa-cors-pds.s3.amazonaws.com/";
-const EOP: &str = "https://maia.usno.navy.mil/ser7/finals2000A.all";
+const EOP: &str = "https://datacenter.iers.org/products/eop/rapid/standard/finals2000A.all";
+const EOP_BACKUP: &str = "https://maia.usno.navy.mil/ser7/finals2000A.all";
 const GRAVITY: &str = "https://earth-info.nga.mil/php/download.php?file=egm-96spherical";
 const GRAVITY_HASH: &str = "1f21ab8151c1b9fe25f483a4f6b78acdbf5306daf923725017b83d87a5f33472";
+
+fn earth_orientation(
+    mut download: impl FnMut(&str) -> Result<Download>,
+    progress: &(impl Fn(Progress) + Sync),
+) -> Result<Download> {
+    let mut errors = Vec::new();
+    for (source, url) in [("IERS", EOP), ("USNO", EOP_BACKUP)] {
+        progress(Progress::new(
+            RefreshStage::ModelInputs,
+            format!("Downloading Earth orientation from {source}"),
+        ));
+        match download(url) {
+            Ok(file) => return Ok(file),
+            Err(e) => errors.push(format!("{source}: {e:#}")),
+        }
+    }
+    anyhow::bail!("Earth-orientation downloads failed ({})", errors.join("; "))
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Download {
@@ -47,9 +66,14 @@ impl Sources {
         fs::create_dir_all(root)?;
         let client = Client::builder()
             .https_only(true)
+            // Use the configured DNS servers asynchronously. System getaddrinfo
+            // can stall past the connection timeout on some Linux DNS setups.
+            .hickory_dns(true)
             .user_agent("ToughFix/0.1 (open-source GPS assistance)")
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
+            // Model inputs are multi-megabyte public-service downloads. Allow
+            // time for DNS retries and slow connection setup as well as transfer.
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(90))
             .redirect(Policy::limited(5))
             .build()?;
         let manifest = fs::read(root.join("manifest.json"))
@@ -71,10 +95,17 @@ impl Sources {
             "Invalid source cache path"
         );
         let mut last = None;
-        for _ in 0..2 {
+        for attempt in 1..=2 {
+            let started = Instant::now();
             match self.fetch_once(url, file, missing_ok) {
                 Ok(v) => return Ok(v),
-                Err(e) => last = Some(e),
+                Err(e) => {
+                    eprintln!(
+                        "ToughFix: source download attempt {attempt}/2 failed after {:.1}s: {e:#}",
+                        started.elapsed().as_secs_f64()
+                    );
+                    last = Some(e);
+                }
             }
         }
         Err(last.unwrap())
@@ -381,7 +412,10 @@ impl Sources {
             .filter(|m| m.file == "finals2000A.all")
             .is_none()
         {
-            self.required("earth_orientation", EOP, "finals2000A.all")?;
+            earth_orientation(
+                |url| self.required("earth_orientation", url, "finals2000A.all"),
+                progress,
+            )?;
         }
         let gravity_ok = fs::read(self.root.join("egm96.zip"))
             .is_ok_and(|b| crate::camera::hash(&b) == GRAVITY_HASH);
@@ -512,6 +546,42 @@ pub fn ultra_epoch(key: &str) -> Result<i64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn official_earth_orientation_mirror_records_its_source_and_only_falls_back_on_failure() {
+        for fail_primary in [false, true] {
+            let mut calls = Vec::new();
+            let file = earth_orientation(
+                |url| {
+                    calls.push(url.to_owned());
+                    if fail_primary && url == EOP {
+                        anyhow::bail!("primary timed out");
+                    }
+                    Ok(Download {
+                        file: "finals2000A.all".into(),
+                        url: url.into(),
+                        bytes: 100,
+                        sha256: "verified-download-hash".into(),
+                        retrieved_at_gps: 1.,
+                        known_at_gps: 1.,
+                        http_last_modified: None,
+                    })
+                },
+                &|_| {},
+            )
+            .unwrap();
+            assert_eq!(file.url, if fail_primary { EOP_BACKUP } else { EOP });
+            assert_eq!(calls.len(), if fail_primary { 2 } else { 1 });
+        }
+        let error = earth_orientation(
+            |url| anyhow::bail!("Downloading {url}: connection failed"),
+            &|_| {},
+        )
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("IERS:") && message.contains("USNO:"));
+        assert!(message.contains(EOP) && message.contains(EOP_BACKUP));
+    }
+
     #[test]
     fn ultra_download_window_covers_full_fit_and_excludes_future_products() {
         let products: Vec<_> = (0..=16).map(|i| (i * 21600, format!("{i}"))).collect();
