@@ -2,7 +2,7 @@
 //! Native camera monitoring, prediction scheduling, uploads and commit receipts.
 use crate::{
     camera,
-    model::{Action, CameraInfo, DataInfo, Device, Phase, Receipt, State, now_gps},
+    model::{Action, CameraInfo, CameraModel, DataInfo, Device, Phase, Receipt, State, now_gps},
     predictor::engine,
     storage,
 };
@@ -153,6 +153,14 @@ fn save_upload_settings(config: &Config, automatic: bool, hours: u32) -> Result<
 }
 fn archive_exclusions(data: &[u8]) -> Option<Vec<u8>> {
     use crate::predictor::validation::{BLOCK, RECORD};
+    if data.len() == crate::predictor::tg6::CAPACITY {
+        let archive = crate::predictor::tg6::Archive::decode(data).ok()?;
+        return Some(
+            (1..=32u8)
+                .filter(|p| !archive.records.iter().any(|r| r.prn == *p as u16))
+                .collect(),
+        );
+    }
     (data.len() == 4 * BLOCK).then(|| {
         (1..=32u8)
             .filter(|&prn| {
@@ -201,6 +209,73 @@ pub fn lock_instance(config: &Config) -> Result<File> {
         "Another ToughFix worker is already running"
     );
     Ok(file)
+}
+
+/// Headless access uses the same model checks, health preflight, mount handling,
+/// commit receipts and transport lock as the desktop. No arbitrary payloads.
+pub fn camera_cli(mut args: impl Iterator<Item = String>) -> Result<()> {
+    let action = args.next().unwrap_or_default();
+    if matches!(action.as_str(), "--help" | "-h" | "") {
+        println!(
+            "toughfix camera info [--state-dir PATH]\ntoughfix camera update [--state-dir PATH]\nUse one connected supported camera. Update sends only current health-validated predictions from a successful refresh. Storage is restored afterward."
+        );
+        return Ok(());
+    }
+    ensure!(
+        matches!(action.as_str(), "info" | "update"),
+        "Unknown camera action"
+    );
+    let mut state_dir = crate::default_state_dir();
+    while let Some(arg) = args.next() {
+        ensure!(arg == "--state-dir", "Unknown camera option {arg}");
+        state_dir = args.next().context("--state-dir needs a path")?.into();
+    }
+    let config = Config {
+        project: env!("CARGO_MANIFEST_DIR").into(),
+        state_dir,
+        demo: false,
+        monitor_only: false,
+    };
+    let _lock = lock_instance(&config)?;
+    let devices = camera::discover_checked()?;
+    ensure!(
+        devices.len() == 1,
+        "Connect exactly one supported camera in USB Storage mode"
+    );
+    let device = &devices[0];
+    // Reject missing/unapproved predictions before changing mount state.
+    if action == "update" {
+        preflight(&config, device.model)?;
+    }
+    let shared = Arc::new(Mutex::new(State {
+        device: Some(device.clone()),
+        data: data_info(&config, device.model),
+        ..Default::default()
+    }));
+    let result=storage::prepare(device).and_then(|prepared| {
+        if action=="info" {
+            let info=camera::probe(&prepared)?;
+            remember_camera(&config,&prepared,&info);
+            println!("{}",serde_json::to_string_pretty(&json!({"model":device.model.scsi_name(),"camera":info}))?);
+            Ok(())
+        } else {
+            upload(&config,&shared,&prepared,UploadKind::Latest)?;
+            let s=shared.lock().unwrap();
+            println!("{}",serde_json::to_string_pretty(&json!({"model":device.model.scsi_name(),"receipt":s.receipt,"message":s.message}))?);
+            Ok(())
+        }
+    });
+    let restored = storage::release(device);
+    match (result, restored) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => {
+            Err(error).context("Camera operation finished, but storage could not be restored")
+        }
+        (Err(error), Err(restore)) => {
+            Err(error).context(format!("Storage restoration also failed: {restore:#}"))
+        }
+    }
 }
 
 fn latest_receipt(config: &Config) -> Option<Receipt> {
@@ -408,8 +483,8 @@ fn record(config: &Config, receipt: &Receipt) -> Result<()> {
     atomic_json(&path, &receipts)
 }
 
-fn data_info(config: &Config) -> DataInfo {
-    let pointer = engine::current(&config.state_dir).unwrap_or_default();
+fn data_info(config: &Config, model: CameraModel) -> DataInfo {
+    let pointer = engine::current_for(&config.state_dir, model).unwrap_or_default();
     let metrics = &pointer["metrics"];
     let health = read_json(engine::root(&config.state_dir).join("data/health-state.json"))
         .unwrap_or_default();
@@ -421,11 +496,16 @@ fn data_info(config: &Config) -> DataInfo {
     } else {
         camera::hash(&data)
     };
-    let start = data
-        .get(..4)
-        .and_then(|b| b.try_into().ok())
-        .map(u32::from_be_bytes)
-        .unwrap_or(0) as f64;
+    let start = if model == CameraModel::Tg6 {
+        crate::predictor::tg6::Archive::decode(&data)
+            .map(|a| a.start())
+            .unwrap_or(0.)
+    } else {
+        data.get(..4)
+            .and_then(|b| b.try_into().ok())
+            .map(u32::from_be_bytes)
+            .unwrap_or(0) as f64
+    };
     let fresh = guard["checked_at_gps"]
         .as_f64()
         .is_some_and(|t| (0. ..=3600.).contains(&(now_gps() - t)));
@@ -454,7 +534,7 @@ fn data_info(config: &Config) -> DataInfo {
     if !fresh {
         failures.push("Satellite health checks need refreshing".into());
     }
-    if data.len() != 130720 || guard["output_sha256"].as_str() != Some(&digest) {
+    if data.len() != model.assistance_size() || guard["output_sha256"].as_str() != Some(&digest) {
         failures.push("Prediction file is missing or does not match its health report".into());
     }
     if !(start <= now_gps() && now_gps() < start + 1209600.) {
@@ -527,8 +607,8 @@ struct Prepared {
     start: String,
     end: String,
 }
-fn preflight(config: &Config) -> Result<Prepared> {
-    let (data, pointer) = engine::preflight(&config.state_dir)?;
+fn preflight(config: &Config, model: CameraModel) -> Result<Prepared> {
+    let (data, pointer) = engine::preflight_for(&config.state_dir, model)?;
     let sha256 = camera::hash(&data);
     Ok(Prepared {
         data,
@@ -629,7 +709,7 @@ fn upload(config: &Config, shared: &Shared, device: &Device, kind: UploadKind) -
             "Reconnect the camera before another attempt"
         );
     }
-    let prepared = preflight(config)?;
+    let prepared = preflight(config, device.model)?;
     atomic_json(
         &config.state_dir.join("attempt.json"),
         &json!({"pending":true,"sha256":prepared.sha256,"connection_key":device.connection_key}),
@@ -640,7 +720,7 @@ fn upload(config: &Config, shared: &Shared, device: &Device, kind: UploadKind) -
         |phase| set_phase(shared, phase),
         |info| {
             remember_camera(config, device, info);
-            let current = preflight(config)?;
+            let current = preflight(config, device.model)?;
             ensure!(
                 current.data == prepared.data && current.sha256 == prepared.sha256,
                 "Predictions changed while checking camera"
@@ -755,7 +835,7 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 s.automatic = false;
             }
             if !config.demo {
-                s.data = data_info(&config);
+                s.data = data_info(&config, CameraModel::Tg1);
             }
             s.message = if config.demo {
                 "Demo · no device access or uploads"
@@ -843,7 +923,10 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 let mut s = shared.lock().unwrap();
                 s.updating_sources = false;
                 s.source_progress = None;
-                s.data = data_info(&config);
+                s.data = data_info(
+                    &config,
+                    s.device.as_ref().map_or(CameraModel::Tg1, |d| d.model),
+                );
                 let mut manual_already_latest = false;
                 if let Some(key) = manual_refresh_key.take() {
                     manual_already_latest =
@@ -883,7 +966,13 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 if connection != last_connection {
                     if !config.monitor_only
                         && !refreshing
-                        && refresh_on_connection(device.as_ref(), &data_info(&config))
+                        && refresh_on_connection(
+                            device.as_ref(),
+                            &data_info(
+                                &config,
+                                device.as_ref().map_or(CameraModel::Tg1, |d| d.model),
+                            ),
+                        )
                     {
                         // A camera arriving during a failed refresh's backoff
                         // gets an immediate check, without waiting for the timer.
@@ -931,7 +1020,10 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                     last_connection = connection;
                 }
                 s.device = device;
-                s.data = data_info(&config);
+                s.data = data_info(
+                    &config,
+                    s.device.as_ref().map_or(CameraModel::Tg1, |d| d.model),
+                );
                 s.multiple_cameras = devices.len() > 1;
                 if s.multiple_cameras {
                     s.camera_error =
@@ -1329,22 +1421,22 @@ fn demo_connection(shared: &Shared, connected: bool) {
     s.receipt = None;
 }
 fn demo_upload(shared: &Shared) {
-    if shared.lock().unwrap().device.is_none() {
+    let total = shared
+        .lock()
+        .unwrap()
+        .device
+        .as_ref()
+        .map_or(0, |device| device.model.assistance_size());
+    if total == 0 {
         return;
     }
     for phase in [
         Phase::Checking,
-        Phase::Transferring {
-            sent: 0,
-            total: 130720,
-        },
-        Phase::Transferring {
-            sent: 61440,
-            total: 130720,
-        },
+        Phase::Transferring { sent: 0, total },
+        Phase::Transferring { sent: 61440, total },
         Phase::Transferring {
             sent: 122880,
-            total: 130720,
+            total,
         },
         Phase::Validating,
         Phase::Committing,

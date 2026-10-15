@@ -58,31 +58,49 @@ pub struct Storage {
     pub writable: bool,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CameraModel {
     #[default]
     Tg1,
+    Tg6,
     Tough8010,
 }
 impl CameraModel {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Tg1 => "Olympus Tough TG-1",
+            Self::Tg6 => "Olympus Tough TG-6",
             Self::Tough8010 => "Olympus Stylus Tough-8010",
         }
     }
     pub fn scsi_name(&self) -> &'static str {
         match self {
             Self::Tg1 => "TG-1",
+            Self::Tg6 => "TG-6",
             Self::Tough8010 => "StylusTough-8010",
         }
     }
     pub fn supports_gps(&self) -> bool {
-        matches!(self, Self::Tg1)
+        matches!(self, Self::Tg1 | Self::Tg6)
+    }
+    pub fn assistance_selector(&self) -> Option<u32> {
+        match self {
+            Self::Tg1 => Some(1),
+            Self::Tg6 => Some(3),
+            Self::Tough8010 => None,
+        }
+    }
+    pub fn assistance_size(&self) -> usize {
+        match self {
+            Self::Tg1 => 130720,
+            Self::Tg6 => crate::predictor::tg6::CAPACITY,
+            Self::Tough8010 => 0,
+        }
     }
     pub fn accepts_pid(&self, pid: &str) -> bool {
         match self {
             Self::Tg1 => pid == "012d",
+            Self::Tg6 => pid == "012e",
             Self::Tough8010 => matches!(pid, "0123" | "0124"),
         }
     }
@@ -370,7 +388,7 @@ impl State {
             activity.warning = true;
         } else if self.device.is_none() {
             activity.title = "Waiting for your camera".into();
-            activity.detail = "Connect an Olympus TG-1 or Stylus Tough-8010".into();
+            activity.detail = "Connect an Olympus TG-1, TG-6 or Stylus Tough-8010".into();
         } else if let Some(note) = self.camera_note.as_ref() {
             activity.title = "Connected".into();
             activity.detail = note.clone();

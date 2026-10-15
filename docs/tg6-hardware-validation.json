@@ -1,0 +1,47 @@
+{
+  "model": "TG-6",
+  "usb_id": "07b4:012e",
+  "firmware": "1.00",
+  "committed_at_utc": "2026-10-15T01:08:19.890043285Z",
+  "sha256": "323ef0a2c31eee5da9865d79e2349bba6ba202e8d606c00e05fb7c0d50aa5759",
+  "bytes": 262144,
+  "start_gps": "2026-10-14T18:00:00",
+  "validity_end_exclusive_gps": "2026-10-28T18:00:00",
+  "included_prns": [
+    1,
+    2,
+    4,
+    5,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    18,
+    19,
+    22,
+    23,
+    25,
+    27,
+    28
+  ],
+  "camera_staged_validation_state": 2,
+  "commit_acknowledged": true,
+  "session_closed": true,
+  "storage_remounted": true,
+  "vendor_prediction_inputs": false,
+  "native_python_encoder_byte_parity": true,
+  "receiver_interpolation_recovered": false,
+  "ancillary_consumer_timing_verified": false,
+  "outdoor_gps_test": {
+    "result": "GPS fix acquired",
+    "approximate_seconds": 5,
+    "source": "Owner report after ejecting/unplugging the uploaded TG-6",
+    "controlled_cold_start": false,
+    "unaided_baseline_available": false
+  },
+  "limitations": [
+    "Upload acceptance does not prove receiver interpolation, assistance usage, acquisition improvement, or position accuracy."
+  ]
+}

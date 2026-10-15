@@ -6,9 +6,17 @@ Hyprland with Waybar. The tray exists only while a supported Olympus camera is c
 in USB Storage mode. Left-click opens the window; its menu offers Open and
 Quit. Without a tray host, the window opens and explains the issue.
 
+TG-1 and TG-6 use separate independently generated GPS formats. The app checks
+the camera identity and assistance selector before choosing a file; Tough-8010
+remains status-only. TG-6 native generation, live health checks and USB commit
+have been tested on firmware 1.00. The owner reported an outdoor GPS fix in
+roughly five seconds after the upload; see
+[the validation record](../docs/tg6-format.md#native-integration-and-hardware-validation).
+
 Activity and progress stay pinned above the scrolling content, including in a
-small window or while viewing Advanced details. The main view shows an embedded
-camera illustration and health snapshot, a colored battery-shaped gauge,
+small window or while viewing Advanced details. The main view shows a
+model-specific embedded illustration for TG-1, TG-6, or Tough-8010, a health
+snapshot, a colored battery-shaped gauge,
 an SD card graphic showing capacity, a storage-use bar and free space,
 GPS assistance summary with a slowly rotating globe and orbiting satellite
 dots, and last confirmed update. The illustration pauses when hidden and
@@ -26,11 +34,11 @@ Navigation uses Libadwaita's native icon-and-label view switcher in the header,
 with a bottom navigation bar below 520 logical pixels. Native controls keep
 their theme styling; custom CSS is limited to content cards and labels.
 
-The main window starts at 560 × 660. On Hyprland, ToughFix requests floating
-placement for its own window each time it opens, without editing compositor
-configuration. Reopening retains the size used before hiding. Resizes and
-placement changes while the window is open are left to the user. Other
-desktops retain their normal placement policy. The battery bolt means USB is
+The main window is a compact, fixed-size utility window with a 560 × 660
+default size. GTK declares it non-resizable before its first display, so
+Hyprland opens it floating without first adding it to a window group. Window
+placement uses native hints and requires no compositor configuration. Content
+scrolls inside the window. The battery bolt means USB is
 connected; active charging is not exposed by the camera. Unknown battery and
 free-space readings are shown as unavailable, rather than zero or empty.
 
@@ -175,7 +183,7 @@ overrides `$XDG_STATE_HOME/toughfix` or `~/.local/state/toughfix`.
 pass their configured path.
 
 The supplied `70-toughfix.rules` grants the active local desktop user access
-only to matching TG-1 and Stylus Tough-8010 disks and SCSI generic endpoints. The installer
+only to matching TG-1, TG-6 and Stylus Tough-8010 disks and SCSI generic endpoints. The installer
 sets it up. Without access,
 the dashboard explains the permission issue and blocks uploads.
 

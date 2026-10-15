@@ -88,6 +88,7 @@ fn discover_at(root: &Path, devices: &Path, mounts: &str) -> Vec<Device> {
         }
         let model = match get(sys.join("device/model")).as_str() {
             "TG-1" => CameraModel::Tg1,
+            "TG-6" => CameraModel::Tg6,
             "StylusTough-8010" => CameraModel::Tough8010,
             _ => continue,
         };
@@ -365,6 +366,7 @@ pub struct Session<T: Transport> {
     pub timeout: u32,
     pub validated: bool,
     pub committed: bool,
+    archive_size: usize,
 }
 impl<T: Transport> Session<T> {
     pub fn new(io: T) -> Self {
@@ -375,6 +377,7 @@ impl<T: Transport> Session<T> {
             timeout: 10_000,
             validated: false,
             committed: false,
+            archive_size: 130720,
         }
     }
     fn tunnel(&mut self, opcode: u8, size: usize, outgoing: Option<&[u8]>) -> Result<Vec<u8>> {
@@ -388,9 +391,6 @@ impl<T: Transport> Session<T> {
         cdb[6..10].copy_from_slice(&(size as u32).to_be_bytes());
         self.io.transfer(&cdb, size, outgoing, self.timeout)
     }
-    pub fn inquiry(&mut self) -> Result<()> {
-        self.inquiry_for(&CameraModel::Tg1)
-    }
     fn inquiry_for(&mut self, model: &CameraModel) -> Result<()> {
         let raw = self
             .io
@@ -402,6 +402,7 @@ impl<T: Transport> Session<T> {
             "SCSI identity is not {}",
             model.name()
         );
+        self.archive_size = model.assistance_size();
         Ok(())
     }
     pub fn operation(
@@ -460,7 +461,10 @@ impl<T: Transport> Session<T> {
             ensure!(params == [0x5001], "Only battery telemetry is queried");
         }
         if code == 0x9128 {
-            ensure!(params[0] == 130720, "Expected four-week CEP container");
+            ensure!(
+                params[0] as usize == self.archive_size,
+                "Assistance size does not match this camera"
+            );
             self.validated = false;
             self.committed = false;
         }
@@ -470,7 +474,7 @@ impl<T: Transport> Session<T> {
                 !data.is_empty()
                     && data.len() <= CHUNK
                     && params[1] as usize == data.len()
-                    && params[0] as usize + data.len() <= 130720,
+                    && params[0] as usize + data.len() <= self.archive_size,
                 "Invalid assistance chunk"
             );
         }
@@ -532,7 +536,13 @@ impl<T: Transport> Session<T> {
         sleep: impl Fn(Duration),
     ) -> Result<()> {
         ensure!(
-            data.len() == 130720 && (1..=131072).contains(&limit),
+            data.len() == self.archive_size
+                && (1..=if self.archive_size == crate::predictor::tg6::CAPACITY {
+                    262144
+                } else {
+                    131072
+                })
+                    .contains(&limit),
             "Invalid archive or camera transfer limit"
         );
         self.operation(0x9128, &[data.len() as u32], false, None)?;
@@ -762,7 +772,13 @@ fn info<T: Transport>(session: &mut Session<T>, device: &Device) -> Result<Camer
         let chip = word(&session.operation(0x9126, &[], true, None)?)?;
         let limit = word(&session.operation(0x9127, &[], true, None)?)?;
         ensure!(
-            chip == 1 && (1..=131072).contains(&limit),
+            Some(chip) == device.model.assistance_selector()
+                && (1..=if device.model == CameraModel::Tg6 {
+                    262144
+                } else {
+                    131072
+                })
+                    .contains(&limit),
             "Unexpected GPS chip or transfer limit"
         );
         (chip, limit)
@@ -854,7 +870,7 @@ fn upload_session<T: Transport>(
         "This camera has no GPS receiver"
     );
     progress(Phase::Checking);
-    session.inquiry()?;
+    session.inquiry_for(&device.model)?;
     session.operation(0x1002, &[1], false, None)?;
     let result = (|| {
         let camera = info(session, device)?;
@@ -999,8 +1015,23 @@ mod tests {
             if let Some(dataset) = &self.device_info {
                 match self.command.unwrap().0 {
                     0x1001 => return dataset.clone(),
-                    0x9126 => return 1u32.to_le_bytes().to_vec(),
-                    0x9127 => return 131072u32.to_le_bytes().to_vec(),
+                    0x9126 => {
+                        return self
+                            .model
+                            .assistance_selector()
+                            .unwrap_or(0)
+                            .to_le_bytes()
+                            .to_vec();
+                    }
+                    0x9127 => {
+                        return (if self.model == CameraModel::Tg6 {
+                            262144u32
+                        } else {
+                            131072u32
+                        })
+                        .to_le_bytes()
+                        .to_vec();
+                    }
                     0x1015 => return vec![84],
                     0x1004 => return [1u32.to_le_bytes(), 1u32.to_le_bytes()].concat(),
                     0x1005 => {
@@ -1211,6 +1242,69 @@ mod tests {
             ]
         );
         assert_eq!(session.io.body, data);
+    }
+
+    #[test]
+    fn tg6_uses_selector_three_and_the_full_buffer_without_cross_model_uploads() {
+        let mut device = fake_device();
+        device.model = CameraModel::Tg6;
+        let fake = || Fake {
+            model: CameraModel::Tg6,
+            device_info: Some(fake_identity_for(&CameraModel::Tg6, true)),
+            state: 2,
+            ..Default::default()
+        };
+        let mut session = Session::new(fake());
+        let data = vec![42; crate::predictor::tg6::CAPACITY];
+        let result = upload_session(
+            &mut session,
+            &device,
+            &data,
+            |_| {},
+            |info| {
+                assert_eq!(info.gps_chip, 3);
+                assert_eq!(info.transfer_limit, 262144);
+                Ok(true)
+            },
+            |_| Ok(()),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(result, UploadOutcome::Committed);
+        assert_eq!(session.io.body, data);
+        assert_eq!(session.io.codes.iter().filter(|&&c| c == 0x9129).count(), 5);
+        let mut session = Session::new(fake());
+        assert!(
+            upload_session(
+                &mut session,
+                &device,
+                &vec![0; 130720],
+                |_| {},
+                |_| Ok(true),
+                |_| Ok(()),
+                |_| {}
+            )
+            .is_err()
+        );
+        assert!(!session.io.codes.contains(&0x9128));
+        let mut session = Session::new(Fake {
+            device_info: Some(fake_identity_with_telemetry(true)),
+            state: 2,
+            ..Default::default()
+        });
+        assert!(
+            upload_session(
+                &mut session,
+                &fake_device(),
+                &data,
+                |_| {},
+                |_| Ok(true),
+                |_| Ok(()),
+                |_| {}
+            )
+            .is_err()
+        );
+        assert!(!session.io.codes.contains(&0x9128));
     }
 
     #[test]

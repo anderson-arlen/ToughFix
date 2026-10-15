@@ -16,7 +16,6 @@ use std::{
 };
 
 mod earth;
-mod floating;
 mod metrics;
 
 // Keep native navigation and controls themed by Libadwaita. Only the
@@ -74,6 +73,7 @@ struct Fields {
     spinner: gtk::Spinner,
     activity_card: gtk::Box,
     camera_image: gtk::Picture,
+    camera_tg6_image: gtk::Picture,
     camera_8010_image: gtk::Picture,
     camera_name: gtk::Label,
     gps_card: gtk::Box,
@@ -245,8 +245,21 @@ fn render(f: &Fields, s: &State, monitor_only: bool) {
             .as_ref()
             .map_or("Olympus Tough", |d| d.model.name()),
     );
-    f.camera_image.set_visible(s.gps_supported());
-    f.camera_8010_image.set_visible(!s.gps_supported());
+    f.camera_image.set_visible(
+        s.device
+            .as_ref()
+            .is_none_or(|d| d.model == crate::model::CameraModel::Tg1),
+    );
+    f.camera_tg6_image.set_visible(
+        s.device
+            .as_ref()
+            .is_some_and(|d| d.model == crate::model::CameraModel::Tg6),
+    );
+    f.camera_8010_image.set_visible(
+        s.device
+            .as_ref()
+            .is_some_and(|d| d.model == crate::model::CameraModel::Tough8010),
+    );
     f.gps_card.set_visible(s.gps_supported());
     for card in &f.gps_details {
         card.set_visible(s.gps_supported());
@@ -522,8 +535,9 @@ pub fn run(
         let provider=gtk::CssProvider::new();provider.load_from_data(STYLE);
         gtk::style_context_add_provider_for_display(&gtk::gdk::Display::default().expect("GTK display"),&provider,gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::PreferDark);
-        let window=adw::ApplicationWindow::builder().application(app).title("ToughFix").default_width(560).default_height(660).width_request(400).height_request(360).hide_on_close(true).build();
-        floating::compact_default(window.upcast_ref::<gtk::ApplicationWindow>(),560,660);
+        // Advertise fixed-size utility hints before the first Wayland commit.
+        // The compositor can float this window before considering grouping.
+        let window=adw::ApplicationWindow::builder().application(app).title("ToughFix").default_width(560).default_height(660).width_request(400).height_request(360).resizable(false).hide_on_close(true).build();
         let toolbar = adw::ToolbarView::new();
         let header=adw::HeaderBar::new();
         header.set_centering_policy(adw::CenteringPolicy::Loose);
@@ -593,6 +607,14 @@ pub fn run(
         camera_image.set_size_request(180, 112);
         camera_image.set_valign(gtk::Align::Center);
         camera_image.set_alternative_text(Some("Illustration of an Olympus Tough TG-1 camera"));
+        let image_stream = gtk::gio::MemoryInputStream::from_bytes(&glib::Bytes::from_static(include_bytes!("../desktop/assets/tg-6.png")));
+        let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream(&image_stream, None::<&gtk::gio::Cancellable>).expect("Embedded TG-6 illustration");
+        let camera_tg6_image = gtk::Picture::for_paintable(&gtk::gdk::Texture::for_pixbuf(&pixbuf));
+        camera_tg6_image.set_can_shrink(true);
+        camera_tg6_image.set_size_request(180, 112);
+        camera_tg6_image.set_valign(gtk::Align::Center);
+        camera_tg6_image.set_alternative_text(Some("Illustration of an Olympus Tough TG-6 camera"));
+        camera_tg6_image.set_visible(false);
         let image_stream = gtk::gio::MemoryInputStream::from_bytes(&glib::Bytes::from_static(include_bytes!("../desktop/assets/tough-8010.png")));
         let pixbuf = gtk::gdk_pixbuf::Pixbuf::from_stream(&image_stream, None::<&gtk::gio::Cancellable>).expect("Embedded Tough-8010 illustration");
         let camera_8010_image = gtk::Picture::for_paintable(&gtk::gdk::Texture::for_pixbuf(&pixbuf));
@@ -603,6 +625,7 @@ pub fn run(
         camera_8010_image.set_visible(false);
         let image_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         image_slot.append(&camera_image);
+        image_slot.append(&camera_tg6_image);
         image_slot.append(&camera_8010_image);
         let illustration = adw::Clamp::builder().maximum_size(180).tightening_threshold(180).child(&image_slot).build();
         camera_row.append(&illustration);
@@ -800,21 +823,24 @@ pub fn run(
                 state.phase = crate::model::Phase::Idle;
             });
             app.add_action(&action);
-            let action = gtk::gio::SimpleAction::new("demo-8010", None);
-            let demo_state = shared.clone();
-            action.connect_activate(move |_, _| {
-                let mut state = demo_state.lock().unwrap();
-                if let Some(device) = state.device.as_mut() {
-                    device.model = crate::model::CameraModel::Tough8010;
-                }
-                if let Some(camera) = state.camera.as_mut() {
-                    camera.gps_chip = 0;
-                    camera.transfer_limit = 0;
-                    camera.battery = Some(100);
-                }
-                state.receipt = None;
-            });
-            app.add_action(&action);
+            for (name, model) in [("demo-8010", crate::model::CameraModel::Tough8010), ("demo-tg6", crate::model::CameraModel::Tg6)] {
+                let action = gtk::gio::SimpleAction::new(name, None);
+                let demo_state = shared.clone();
+                action.connect_activate(move |_, _| {
+                    let mut state = demo_state.lock().unwrap();
+                    if let Some(device) = state.device.as_mut() {
+                        device.model = model;
+                    }
+                    if let Some(camera) = state.camera.as_mut() {
+                        camera.gps_chip = model.assistance_selector().unwrap_or(0);
+                        camera.transfer_limit = model.assistance_size() as u32;
+                        camera.battery = Some(100);
+                    }
+                    state.data.bytes = model.assistance_size();
+                    state.receipt = None;
+                });
+                app.add_action(&action);
+            }
             for name in ["demo-preparing", "demo-storage-error", "demo-storage-ready"] {
                 let action = gtk::gio::SimpleAction::new(name, None);
                 let shared = shared.clone();
@@ -900,7 +926,7 @@ pub fn run(
                 app.add_action(&action);
             }
         }
-        let fields = Rc::new(Fields { connection, camera, storage, observed, fitted, clocks, source, source_link, health, training, validity, satellites, quality, hash, commit, match_status, commit_hash, banner, progress, message, upload, refresh, update_gps, camera_refresh, automatic, upload_interval, tray_error, activity_title, activity_detail, spinner, activity_card, camera_image, camera_8010_image, camera_name: name, gps_card, gps_details, health_badge, health_caption, resources: vec![resources_main,resources_details], assistance_summary, last_update_summary });
+        let fields = Rc::new(Fields { connection, camera, storage, observed, fitted, clocks, source, source_link, health, training, validity, satellites, quality, hash, commit, match_status, commit_hash, banner, progress, message, upload, refresh, update_gps, camera_refresh, automatic, upload_interval, tray_error, activity_title, activity_detail, spinner, activity_card, camera_image, camera_tg6_image, camera_8010_image, camera_name: name, gps_card, gps_details, health_badge, health_caption, resources: vec![resources_main,resources_details], assistance_summary, last_update_summary });
         let initial_state = shared.lock().unwrap().clone();
         render(&fields, &initial_state, monitor_only);
         {let tx=tx.clone();fields.refresh.connect_clicked(move |_|{let _=tx.send(Action::Refresh);});}

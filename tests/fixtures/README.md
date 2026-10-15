@@ -22,3 +22,11 @@ the investigation archive, a camera, or network access.
 Generated test artifacts and expectations are original ToughFix work. Public
 notice, orbit, and Earth-orientation excerpts retain their source terms; see
 [NOTICE.md](../../NOTICE.md). No vendor assistance file or firmware is included.
+## TG-6 state-vector fixture
+
+`tg6-state-vectors.bin` contains independently generated astronomy tables and
+the first two native PRN 1 states from the 2026-10-14 18:00 GPS experiment.
+It was encoded with the independent Python reference, with one satellite and
+zero padding omitted. It is a 1136-byte codec fixture, not an upload candidate.
+It contains no vendor assistance bytes. SHA-256:
+`36a654916acd8c49fb951b9a6810e28e44fb6b4ca3572fad635d94dde730a2b6`.

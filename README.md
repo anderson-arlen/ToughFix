@@ -1,12 +1,17 @@
 # ToughFix
 
-**Fresh GPS assistance for an Olympus Tough TG-1, automatically, on Linux.**
+**Fresh GPS assistance for Olympus Tough cameras, automatically, on Linux.**
 
 ToughFix downloads public GPS satellite observations, calculates its own
 14-day orbit and clock predictions, and updates your camera when you plug it
 in. A window and system tray show camera status, prediction freshness, and
 upload progress. The app and installer are written in Rust; neither Olympus's
 updater nor any outside prediction service is needed.
+
+TG-1 and TG-6 GPS updates are supported. TG-6 native independent generation,
+live satellite-health checks, and USB upload were tested on firmware 1.00.
+The camera accepted the generated file, and the owner reported an outdoor
+GPS fix in roughly five seconds afterward. See the [TG-6 validation record](docs/tg6-format.md#native-integration-and-hardware-validation).
 
 The Olympus Stylus Tough-8010 is also supported for battery, firmware, and
 storage status. It has no GPS receiver and receives no assistance updates.
@@ -102,8 +107,8 @@ refresh does not upload GPS predictions.
 observation ages, model statistics, hashes, upload history, and diagnostics.
 Native Libadwaita navigation appears in the header, moving to a bottom bar in
 narrow windows. Status and progress remain visible on every view.
-The main window defaults to a compact floating window on Hyprland; other
-desktops use their normal placement policy. Download stages show animated progress; orbit
+The compact utility window uses native GTK fixed-size hints, allowing it to
+open floating before automatic grouping. Download stages show animated progress; orbit
 calculation reports completed satellites, and uploads report transferred bytes.
 
 **Settings → Start when camera connects** controls automatic launching.
@@ -410,6 +415,16 @@ GPS assistance is supported for the **Olympus TG-1**. Static format analysis use
 TG-1 firmware 1.1; the documented successful camera trial used firmware 1.00.
 Other Tough models and GPS chipsets may use different formats or protocols.
 
+The **TG-6**, tested with firmware 1.00, uses selector-3 state-vector files.
+The native app generates its file from the same independent orbital fit and
+routes the correct format to the connected model. A 256-KiB generated file
+with 17 health-cleared satellites was accepted and committed by the camera.
+[Format findings and validation limits](docs/tg6-format.md) describe the
+remaining receiver verification; no OM prediction feed is used at runtime.
+The [recent accuracy comparison](docs/tg6-accuracy.md) finds lower errors for
+the independent candidate over an observed 18-hour window, with the limits of
+that retrospective comparison documented alongside the results.
+
 The **Olympus Stylus Tough-8010**, tested with firmware 1.00, supports battery,
 firmware, and storage information. ToughFix briefly switches its USB interface
 from ordinary storage to the camera's telemetry mode, reads its status, and
@@ -584,6 +599,15 @@ The native checks cover protocol framing and commit order, independent CEP
 decoding, health lifecycles, stale-data rejection, atomic publication,
 camera-associated receipts, and installation. CI runs the checks and a locked
 release build on Rust 1.92 and stable, plus a weekly dependency-advisory audit.
+
+The numerical libraries use the unmodified crates.io release of Simba 0.9.1.
+Its compile-time macro dependency `paste` has an informational maintenance
+advisory, [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436.html).
+The specific exception in [.cargo/audit.toml](.cargo/audit.toml) documents why
+it is accepted until the solver libraries support the newer Simba release
+that removes `paste`. CI continues to reject other advisory warnings.
+The local [ODE solver corrections](vendor/ode_solvers/TOUGHFIX-PATCH.md)
+remain necessary for numerical correctness.
 
 Pushing a version tag such as `v0.1.0` builds and tests the tagged source in an
 Arch container as an unprivileged user, then creates a GitHub release containing

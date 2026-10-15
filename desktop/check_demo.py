@@ -53,7 +53,10 @@ def window(title):
 
 
 def main():
-    if APP in command('gapplication', 'list-apps'):
+    if 'true' in command('gdbus', 'call', '--session',
+                         '--dest', 'org.freedesktop.DBus',
+                         '--object-path', '/org/freedesktop/DBus',
+                         '--method', 'org.freedesktop.DBus.NameHasOwner', APP):
         raise SystemExit('Quit the existing demo first; this check owns its demo process.')
     with open('/tmp/tg-agps-desktop-demo.log', 'w') as log:
         process = subprocess.Popen([str(ROOT / 'target/debug/toughfix'),
@@ -72,6 +75,7 @@ def main():
             print('PASS: clicking tray activation opens the window')
 
             until(lambda: window('ToughFix') and window('ToughFix')['floating']
+                  and not window('ToughFix')['grouped']
                   and window('ToughFix')['size'] == [560, 660])
             overview = window('ToughFix')
             action('demo-advanced')
@@ -86,7 +90,7 @@ def main():
             until(lambda: window('ToughFix'))
             assert len([c for c in json.loads(command('hyprctl', '-j', 'clients'))
                         if c.get('class') == APP]) == 1
-            print('PASS: Camera, Advanced and Settings tabs share one compact floating window')
+            print('PASS: native fixed-size window floats outside groups; tabs share that window')
 
             action('demo-hide')
             until(lambda: not visible())
@@ -95,14 +99,8 @@ def main():
 
             command('gapplication', 'launch', APP)
             until(lambda: window('ToughFix') and window('ToughFix')['floating']
+                  and not window('ToughFix')['grouped']
                   and window('ToughFix')['size'] == [560, 660])
-            selector = 'address:' + window('ToughFix')['address']
-            command('hyprctl', 'dispatch',
-                    f'hl.dsp.window.resize({{window="{selector}",x=620,y=700}})')
-            until(lambda: window('ToughFix')['size'] == [620, 700])
-            # Allow GTK to receive the compositor's configure and allocate the
-            # resized contents before hiding the surface.
-            time.sleep(.3)
             action('demo-settings')
             until(lambda: window('ToughFix — Settings'))
             action('demo-hide')
@@ -110,10 +108,11 @@ def main():
             command('gapplication', 'launch', APP)
             until(lambda: window('ToughFix — Settings')
                   and window('ToughFix — Settings')['floating']
-                  and window('ToughFix — Settings')['size'] == [620, 700])
+                  and not window('ToughFix — Settings')['grouped']
+                  and window('ToughFix — Settings')['size'] == [560, 660])
             action('demo-hide')
             until(lambda: not visible())
-            print('PASS: reopening floats the window and preserves its resized dimensions and selected view')
+            print('PASS: reopening preserves the selected view')
 
             action('demo-disconnect')
             until(lambda: registered(process.pid) is None)

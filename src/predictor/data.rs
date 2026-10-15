@@ -218,18 +218,7 @@ impl Frames {
         let ((utc1, utc2), _) = erfars::timescales::Taiutc(GPS_JD, (t + 19.) / DAY)
             .map_err(|e| anyhow::anyhow!("ERFA TAI/UTC: {e:?}"))?;
         let mjd = utc1 - 2400000.5 + utc2;
-        ensure!(
-            mjd >= self.eop[0][0] && mjd <= self.eop.last().unwrap()[0],
-            "Earth orientation does not cover prediction epoch"
-        );
-        let at = self
-            .eop
-            .partition_point(|r| r[0] < mjd)
-            .clamp(1, self.eop.len() - 1);
-        let a = self.eop[at - 1];
-        let b = self.eop[at];
-        let fraction = (mjd - a[0]) / (b[0] - a[0]);
-        let v = [1, 2, 3].map(|k| a[k] + fraction * (b[k] - a[k]));
+        let v = self.orientation(mjd)?;
         let arcsec = std::f64::consts::PI / (180. * 3600.);
         let mut matrix = [0.; 9];
         erfars::precnutpolar::C2t06a(
@@ -242,6 +231,20 @@ impl Frames {
             &mut matrix,
         );
         Ok(M3::from_row_slice(&matrix))
+    }
+    pub fn orientation(&self, mjd: f64) -> Result<[f64; 3]> {
+        ensure!(
+            mjd >= self.eop[0][0] && mjd <= self.eop.last().unwrap()[0],
+            "Earth orientation does not cover prediction epoch"
+        );
+        let at = self
+            .eop
+            .partition_point(|r| r[0] < mjd)
+            .clamp(1, self.eop.len() - 1);
+        let a = self.eop[at - 1];
+        let b = self.eop[at];
+        let fraction = (mjd - a[0]) / (b[0] - a[0]);
+        Ok([1, 2, 3].map(|k| a[k] + fraction * (b[k] - a[k])))
     }
 }
 

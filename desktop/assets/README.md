@@ -91,5 +91,28 @@ Blue-accent edit prompt:
 > Do not introduce the angled viewpoint of image 2. The output is the same flat
 > front-view illustration in the blue-accent colorway.
 
+## Olympus Tough TG-6
+
+`tg-6.png` is an original generated illustration of the black TG-6 with red
+lens-ring accents, embedded in the Rust executable. It was generated with the
+built-in imagegen tool. [OM SYSTEM's front-view product photo](https://explore.omsystem.com/in/en/tough-tg-6-black)
+was consulted for the camera's design; the prompt describes the subject without
+using that photograph as an image-generation input. The original product photo
+is not distributed here. The PNG retains its generated transparency.
+
+Generation prompt:
+
+> Use case: product-mockup.
+> Asset type: compact camera illustration embedded in ToughFix, a Linux desktop application's camera summary, displayed at 180 by 112 logical pixels.
+> Primary request: Generate a polished original 3D product illustration of a BLACK Olympus Tough TG-6 rugged compact camera. Render the whole camera from the front, level and nearly straight-on with only a tiny amount of top surface visible. The camera is a wide rounded rectangular black body about 1.73 times as wide as tall, with a large central circular lens slightly to the right of center, a textured angular black handgrip on the viewer's left, and a dark vertical OLYMPUS label on that grip. Preserve the TG-6's distinctive concentric black and metallic lens rings with two fine red circular accents, blue-green glass at the center, two small red-outlined fasteners on the left of the lens (above and below), a compact horizontal flash plus small square lamp at the upper right, subtle vertical Tough lettering to the right of the lens, and the small round silver-gray lens-ring release button at the lower right. Black protective edges and modest silver highlights, a small silver strap mount at the far left. Small top shutter button and dial are acceptable but the front remains dominant.
+> Style/medium: high quality realistic 3D product illustration, matching a tasteful desktop device illustration, clean matte black textured plastic, subtle brushed metal, crisp edges, soft studio highlights bright enough to remain readable on light and dark application backgrounds.
+> Composition/framing: landscape 3:2 canvas, camera alone centered, tightly framed with a small transparent margin, complete silhouette fully visible, horizontal body edges, no dramatic perspective.
+> Text: use only restrained OLYMPUS and Tough branding, no added captions or tiny technical specification lettering.
+> Constraints: genuinely transparent alpha background. No scene, no background color, no gradient or halo behind the camera, no floor, no cast shadow outside the camera silhouette, no accessories, no strap hanging off, no watermark. Do not substitute another Olympus model, do not use a projecting interchangeable lens.
+
+Correction prompt (built-in edit of the generated image):
+
+> Use case: precise-object-edit. Asset type: embedded camera illustration for ToughFix. Edit this generated black Olympus Tough TG-6 illustration with just these precise corrections: in the small flash assembly at the UPPER RIGHT, the small square yellow-white lamp must be on the LEFT and the longer rectangular white flash must be on the RIGHT, matching the real TG-6. Keep that assembly in its current location. Also make the background completely transparent with alpha zero outside the camera silhouette: remove the surrounding diffuse gray/black halo and any detached shadow. Preserve the entire camera's design, black materials, red lens-ring accents, branding, composition, size, level near-front viewpoint, crisp silhouette, and soft highlights. Do not change any other camera features. Do not add any background or objects.
+
 The illustrations are included under the project's MIT license. Olympus and Tough
 names and product design identify the supported camera.

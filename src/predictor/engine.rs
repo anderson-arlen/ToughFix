@@ -4,9 +4,9 @@ use super::{
     Options, Progress, RefreshStage, data, generate,
     health::{self, Snapshot},
     sources::Sources,
-    validation,
+    tg6, validation,
 };
-use crate::files;
+use crate::{files, model::CameraModel};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -22,6 +22,18 @@ pub fn current(state: &Path) -> Result<Value> {
     Ok(serde_json::from_slice(&fs::read(
         root(state).join("current.json"),
     )?)?)
+}
+pub fn current_for(state: &Path, model: CameraModel) -> Result<Value> {
+    let pointer = current(state)?;
+    if model == CameraModel::Tg6 {
+        ensure!(
+            pointer["tg6"].is_object(),
+            "TG-6 predictions need a successful refresh"
+        );
+        Ok(pointer["tg6"].clone())
+    } else {
+        Ok(pointer)
+    }
 }
 pub fn archive(state: &Path, pointer: &Value) -> Result<Vec<u8>> {
     let name = pointer["archive"]
@@ -100,7 +112,7 @@ fn fingerprint(observed: &data::Observations, cache: &Path, cutoff: f64) -> Resu
     bytes.extend(fs::read(cache.join("egm96.zip"))?);
     bytes.extend(fs::read(cache.join("finals2000A.all"))?);
     // Bump this whenever fit/encoding policy changes to invalidate old cached fits.
-    bytes.extend_from_slice(b"toughfix-native-engine-v3-observed-ultra-clock-gates");
+    bytes.extend_from_slice(b"toughfix-native-engine-v4-tg6-state-vectors");
     Ok(crate::camera::hash(&bytes))
 }
 
@@ -176,7 +188,47 @@ pub(super) fn publish(
             "Immutable published archive was altered"
         );
     }
-    let pointer = json!({"engine_version":1,"archive":archive_name,"input_fingerprint":fingerprint,"metrics":metrics,"guard":guard});
+    let mut pointer = json!({"engine_version":1,"archive":archive_name,"input_fingerprint":fingerprint,"metrics":metrics,"guard":guard});
+    let tg6_result = (|| -> Result<Value> {
+        let meta = &pointer["metrics"]["tg6"];
+        ensure!(
+            meta.is_object(),
+            "{}",
+            pointer["metrics"]["tg6_error"]
+                .as_str()
+                .unwrap_or("TG-6 generation is unavailable")
+        );
+        let bytes = if let Some(p) = reusable {
+            archive(state, &p["tg6"])?
+        } else {
+            let bytes = fs::read(root.join("generation/native-tg6.bin"))?;
+            ensure!(
+                meta["sha256"].as_str() == Some(crate::camera::hash(&bytes).as_str()),
+                "TG-6 generation hash mismatch"
+            );
+            bytes
+        };
+        let (bytes, guard) = tg6::guard(&bytes, &guarded, &pointer["guard"])?;
+        let hash = crate::camera::hash(&bytes);
+        let archive_name = format!("{hash}.cep");
+        let path = root.join("archives").join(&archive_name);
+        if path.exists() {
+            ensure!(
+                fs::read(path)? == bytes,
+                "Immutable TG-6 archive was altered"
+            );
+        } else {
+            files::atomic(&path, &bytes)?;
+        }
+        Ok(
+            json!({"engine_version":1,"archive":archive_name,"metrics":meta,"guard":guard,
+                  "base_sha256":pointer["guard"]["output_sha256"]}),
+        )
+    })();
+    match tg6_result {
+        Ok(value) => pointer["tg6"] = value,
+        Err(e) => pointer["tg6_error"] = json!(format!("{e:#}")),
+    }
     // The single atomic pointer publishes the bytes and both reports together.
     files::json(&root.join("current.json"), &pointer)?;
     progress(Progress::new(
@@ -227,6 +279,32 @@ pub fn preflight(state: &Path) -> Result<(Vec<u8>, Value)> {
     );
     validation::validate(&bytes)?;
     Ok((bytes, pointer))
+}
+pub fn preflight_for(state: &Path, model: CameraModel) -> Result<(Vec<u8>, Value)> {
+    let (base, pointer) = preflight(state)?;
+    if model != CameraModel::Tg6 {
+        return Ok((base, pointer));
+    }
+    let p = &pointer["tg6"];
+    ensure!(
+        p["engine_version"] == 1
+            && p["guard"]["upload_allowed"] == true
+            && p["base_sha256"] == pointer["guard"]["output_sha256"],
+        "TG-6 prediction is not eligible for upload"
+    );
+    let bytes = archive(state, p)?;
+    ensure!(
+        bytes.len() == tg6::CAPACITY,
+        "TG-6 prediction has the wrong transfer size"
+    );
+    let (guarded, report) = tg6::guard(&bytes, &base, &pointer["guard"])?;
+    ensure!(
+        guarded == bytes
+            && report["upload_allowed"] == true
+            && p["guard"]["output_sha256"].as_str() == Some(crate::camera::hash(&bytes).as_str()),
+        "TG-6 satellite health or file changed; refresh before uploading"
+    );
+    Ok((bytes, p.clone()))
 }
 
 pub fn cli(mut args: impl Iterator<Item = String>) -> Result<()> {
@@ -330,6 +408,51 @@ mod tests {
         files::json(&root(temp.path()).join("current.json"), &pointer).unwrap();
         assert!(preflight(temp.path()).is_err());
         assert!(snapshot.refresh_ok);
+    }
+
+    #[test]
+    fn tg6_preflight_is_model_specific_and_bound_to_current_guarded_native_file() {
+        let temp = Temp::new();
+        let (base, _) = seed(temp.path());
+        let start = validation::start(&base).unwrap();
+        let mut a =
+            tg6::Archive::decode(include_bytes!("../../tests/fixtures/tg6-state-vectors.bin"))
+                .unwrap();
+        let mut r = a.records[0].clone();
+        r.state_epoch = (start / 900. + 44244. * 96.) as u32;
+        r.clock_epoch = r.state_epoch;
+        r.states = vec![r.states[0]; 168];
+        a.records = (1..=6)
+            .map(|prn| tg6::Record { prn, ..r.clone() })
+            .collect();
+        a.padded_size = tg6::CAPACITY;
+        let (bytes, guard) = tg6::guard(
+            &a.encode().unwrap(),
+            &base,
+            &json!({"upload_allowed":true,"failures":[]}),
+        )
+        .unwrap();
+        let hash = crate::camera::hash(&bytes);
+        files::atomic(
+            &root(temp.path()).join(format!("archives/{hash}.cep")),
+            &bytes,
+        )
+        .unwrap();
+        let mut pointer = current(temp.path()).unwrap();
+        pointer["tg6"] = json!({"engine_version":1,"archive":format!("{hash}.cep"),"metrics":{},"guard":guard,"base_sha256":pointer["guard"]["output_sha256"]});
+        files::json(&root(temp.path()).join("current.json"), &pointer).unwrap();
+        assert_eq!(
+            preflight_for(temp.path(), CameraModel::Tg1).unwrap().0,
+            base
+        );
+        assert_eq!(
+            preflight_for(temp.path(), CameraModel::Tg6).unwrap().0,
+            bytes
+        );
+        pointer["tg6"]["base_sha256"] = json!("changed");
+        files::json(&root(temp.path()).join("current.json"), &pointer).unwrap();
+        assert!(preflight_for(temp.path(), CameraModel::Tg6).is_err());
+        assert!(preflight_for(temp.path(), CameraModel::Tg1).is_ok());
     }
     #[test]
     fn failed_refresh_revokes_previous_success_and_keeps_published_bytes() {

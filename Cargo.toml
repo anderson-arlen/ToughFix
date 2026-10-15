@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
 license = "MIT"
-description = "Olympus Tough camera status and TG-1 GPS assistance for Linux"
+description = "Olympus Tough camera status and independent TG-1/TG-6 GPS assistance for Linux"
 
 [dependencies]
 adw = { package = "libadwaita", version = "0.9", features = ["v1_4"] }
@@ -30,8 +30,6 @@ quick-xml = "0.41"
 [patch.crates-io]
 # Upstream 0.6.2 needs DOP853 stage-time and dense-endpoint corrections.
 ode_solvers = { path = "vendor/ode_solvers" }
-# Keep the validated numerical stack; replace only Simba's archived macro crate.
-simba = { path = "vendor/simba" }
 
 [profile.dev]
 debug = 0

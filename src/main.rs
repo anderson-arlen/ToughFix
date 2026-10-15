@@ -48,6 +48,12 @@ fn run() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("audit") {
         return predictor::audit::cli(std::env::args().skip(2));
     }
+    if std::env::args().nth(1).as_deref() == Some("tg6") {
+        return predictor::tg6::cli(std::env::args().skip(2));
+    }
+    if std::env::args().nth(1).as_deref() == Some("camera") {
+        return backend::camera_cli(std::env::args().skip(2));
+    }
     let mut project = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut state_dir = None;
     let mut config_dir = None;
@@ -78,7 +84,7 @@ fn run() -> Result<()> {
             "--monitor-only" => monitor_only = true,
             "--help" | "-h" => {
                 println!(
-                    "ToughFix — Olympus TG-1 GPS assistance\n\npredict         Generate an offline CEP candidate (see predict --help)\nrefresh         Download, generate, validate and publish assistance; no camera access\naudit           Independent numerical trajectory check; no camera access\ninstall         Install/update the app (see install --help)\n--background    Start without opening a window\n--hotplug       Background camera session; exit when disconnected and window hidden\n--monitor-only  Disable network refresh and all uploads\n--demo          Simulated camera; no device access or network requests\n--project PATH  Optional legacy research-history import\n--state-dir PATH  Override app state directory\n--config-dir PATH  Override desktop preferences/service directory\n\nClosing the window hides it while connected and quits when no camera is connected. Hidden instances exit after disconnection. Quit waits for an active camera operation."
+                    "ToughFix — Olympus TG-1/TG-6 GPS assistance\n\npredict         Generate offline TG-1 and TG-6 candidates (see predict --help)\nrefresh         Download, generate, validate and publish assistance; no camera access\ntg6             Inspect or encode a TG-6 file; no camera access\ncamera          Read camera info or upload current validated predictions\naudit           Independent numerical trajectory check; no camera access\ninstall         Install/update the app (see install --help)\n--background    Start without opening a window\n--hotplug       Background camera session; exit when disconnected and window hidden\n--monitor-only  Disable network refresh and all uploads\n--demo          Simulated camera; no device access or network requests\n--project PATH  Optional legacy research-history import\n--state-dir PATH  Override app state directory\n--config-dir PATH  Override desktop preferences/service directory\n\nClosing the window hides it while connected and quits when no camera is connected. Hidden instances exit after disconnection. Quit waits for an active camera operation."
                 );
                 return Ok(());
             }

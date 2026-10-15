@@ -7,6 +7,7 @@ pub mod engine;
 pub mod health;
 mod physics;
 mod sources;
+pub mod tg6;
 pub mod validation;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -395,7 +396,7 @@ pub fn generate(options: &Options, progress: impl Fn(Progress) + Sync) -> Result
                         json!({"elapsed":t,"acceleration":a.as_slice()})
                     })
                     .collect();
-                diagnostics.push(json!({"prn":s.prn,"fit":s.fitted,"clock":s.clock,"integration_convergence":s.convergence,"initial_acceleration_gcrs_mps2":acceleration.as_slice(),"acceleration_probes":probes,"trajectory_6h_gcrs":s.states.iter().step_by(72).collect::<Vec<_>>(),"trajectory_300s_itrf":s.fixed.iter().map(|v|v.as_slice()).collect::<Vec<_>>()}));
+                diagnostics.push(json!({"prn":s.prn,"fit":s.fitted,"clock":s.clock,"integration_convergence":s.convergence,"initial_acceleration_gcrs_mps2":acceleration.as_slice(),"acceleration_probes":probes,"trajectory_6h_gcrs":s.states.iter().step_by(72).collect::<Vec<_>>(),"trajectory_2h_gcrs":s.states.iter().step_by(24).take(168).collect::<Vec<_>>(),"trajectory_300s_itrf":s.fixed.iter().map(|v|v.as_slice()).collect::<Vec<_>>()}));
                 satellites.push(prn);
             }
             Err(e) => flags.push(json!({"prn":prn,"reason":format!("{e:#}")})),
@@ -423,11 +424,22 @@ pub fn generate(options: &Options, progress: impl Fn(Progress) + Sync) -> Result
             .parent()
             .context("Output prefix needs a directory")?,
     )?;
+    let diagnostics = json!({"forecast_start_gps":data::calendar(cutoff),"training_start_gps":data::calendar(start),"satellites":diagnostics});
+    let mut report = report;
+    match tg6::generate(
+        &diagnostics,
+        &report,
+        &options.data_dir.join("finals2000A.all"),
+    ) {
+        Ok((bytes, metrics)) => {
+            fs::write(suffix(&options.output_prefix, "-tg6.bin"), bytes)?;
+            report["tg6"] = metrics;
+        }
+        Err(e) => report["tg6_error"] = json!(format!("{e:#}")),
+    }
     fs::write(
         suffix(&options.output_prefix, "-diagnostics.json"),
-        serde_json::to_vec(
-            &json!({"forecast_start_gps":data::calendar(cutoff),"training_start_gps":data::calendar(start),"satellites":diagnostics}),
-        )?,
+        serde_json::to_vec(&diagnostics)?,
     )?;
     fs::write(suffix(&options.output_prefix, "-generated.cep"), archive)?;
     fs::write(
