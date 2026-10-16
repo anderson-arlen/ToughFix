@@ -73,6 +73,8 @@ struct Satellite {
     prn: usize,
     fitted: physics::Fitted,
     clock: clocks::Clock,
+    tg6_clock: Option<clocks::Tg6Clock>,
+    tg6_clock_error: Option<String>,
     states: Vec<[f64; 6]>,
     fixed: Vec<V3>,
     records: Vec<Vec<u8>>,
@@ -107,6 +109,7 @@ struct Prediction<'a> {
     future_frames: &'a [data::M3],
     cutoff: f64,
     rapid: &'a [data::Sample],
+    history: &'a [data::Sample],
 }
 impl Prediction<'_> {
     fn satellite(&self, prn: usize) -> Result<Satellite> {
@@ -133,6 +136,11 @@ impl Prediction<'_> {
             fitted.rms_m
         );
         let clock = clocks::select(train, self.rapid, prn, cutoff)?;
+        let (tg6_clock, tg6_clock_error) =
+            match clocks::select_tg6(train, self.rapid, self.history, prn, cutoff) {
+                Ok(clock) => (Some(clock), None),
+                Err(error) => (None, Some(format!("{error:#}"))),
+            };
         let trajectory = model.propagate(&[fitted.state], &[fitted.forces], 17. * DAY, 300.)?;
         let refined =
             model.propagate_with_step(&[fitted.state], &[fitted.forces], 17. * DAY, 300., 30.)?;
@@ -236,6 +244,8 @@ impl Prediction<'_> {
             prn,
             fitted,
             clock,
+            tg6_clock,
+            tg6_clock_error,
             states,
             fixed,
             records,
@@ -337,6 +347,7 @@ pub fn generate(options: &Options, progress: impl Fn(Progress) + Sync) -> Result
         future_frames: &future_frames,
         cutoff,
         rapid: &rapid.samples,
+        history: &observed.samples,
     };
     let results: Vec<_> = pool.install(|| {
         wanted
@@ -396,7 +407,7 @@ pub fn generate(options: &Options, progress: impl Fn(Progress) + Sync) -> Result
                         json!({"elapsed":t,"acceleration":a.as_slice()})
                     })
                     .collect();
-                diagnostics.push(json!({"prn":s.prn,"fit":s.fitted,"clock":s.clock,"integration_convergence":s.convergence,"initial_acceleration_gcrs_mps2":acceleration.as_slice(),"acceleration_probes":probes,"trajectory_6h_gcrs":s.states.iter().step_by(72).collect::<Vec<_>>(),"trajectory_2h_gcrs":s.states.iter().step_by(24).take(168).collect::<Vec<_>>(),"trajectory_300s_itrf":s.fixed.iter().map(|v|v.as_slice()).collect::<Vec<_>>()}));
+                diagnostics.push(json!({"prn":s.prn,"fit":s.fitted,"clock":s.clock,"tg6_clock":s.tg6_clock,"tg6_clock_error":s.tg6_clock_error,"integration_convergence":s.convergence,"initial_acceleration_gcrs_mps2":acceleration.as_slice(),"acceleration_probes":probes,"trajectory_6h_gcrs":s.states.iter().step_by(72).collect::<Vec<_>>(),"trajectory_2h_gcrs":s.states.iter().step_by(24).take(168).collect::<Vec<_>>(),"trajectory_300s_itrf":s.fixed.iter().map(|v|v.as_slice()).collect::<Vec<_>>()}));
                 satellites.push(prn);
             }
             Err(e) => flags.push(json!({"prn":prn,"reason":format!("{e:#}")})),
@@ -426,6 +437,10 @@ pub fn generate(options: &Options, progress: impl Fn(Progress) + Sync) -> Result
     )?;
     let diagnostics = json!({"forecast_start_gps":data::calendar(cutoff),"training_start_gps":data::calendar(start),"satellites":diagnostics});
     let mut report = report;
+    let validation_sources: Vec<_> = observed.paths.iter().filter(|p| {
+        data::file_interval(p).is_ok_and(|(a, b)| a < cutoff && b > cutoff - 17. * DAY)
+    }).map(|p| Ok(json!({"file":p.file_name().unwrap().to_string_lossy(),"sha256":format!("{:x}",Sha256::digest(fs::read(p)?))}))).collect::<Result<_>>()?;
+    report["tg6_clock_validation_source_files"] = json!(validation_sources);
     match tg6::generate(
         &diagnostics,
         &report,

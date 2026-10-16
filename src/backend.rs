@@ -938,7 +938,8 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                     }
                 }
                 refresh_interval =
-                    source_refresh_delay(refresh_failures, s.data.checked_gps, now_gps());
+                    source_refresh_delay(refresh_failures, s.data.checked_gps, now_gps())
+                        .max(engine::source_refresh_wait(&config.state_dir, now_gps()));
                 s.message = result
                     .err()
                     .map(|e| format!("Prediction refresh failed: {e:#}"))

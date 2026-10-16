@@ -70,25 +70,42 @@ fn lock(path: &Path) -> Result<File> {
 pub fn refresh(state: &Path, offline: bool, progress: impl Fn(Progress) + Sync) -> Result<Value> {
     let root = root(state);
     let _lock = lock(&root)?;
+    let mut next_refresh_gps = None;
     let result = (|| {
         let cache = root.join("data");
         let snapshot: Snapshot = if offline {
             serde_json::from_slice(&fs::read(cache.join("health-state.json"))?)?
         } else {
-            Sources::new(&cache)?.refresh(&progress)?
+            let mut sources = Sources::new(&cache)?;
+            let result = sources.refresh(&progress);
+            next_refresh_gps = sources.next_refresh_at(result.is_ok());
+            result?
         };
         publish(state, &snapshot, health::now()?, &progress)
     })();
     files::json(
         &root.join("status.json"),
         &match &result {
-            Ok(_) => json!({"refresh_ok":true,"checked_at_gps":health::now()?}),
+            Ok(_) => {
+                json!({"refresh_ok":true,"checked_at_gps":health::now()?,"next_refresh_gps":next_refresh_gps})
+            }
             Err(e) => {
-                json!({"refresh_ok":false,"checked_at_gps":health::now()?,"error":format!("{e:#}")})
+                json!({"refresh_ok":false,"checked_at_gps":health::now()?,"error":format!("{e:#}"),"next_refresh_gps":next_refresh_gps})
             }
         },
     )?;
     result
+}
+
+pub fn source_refresh_wait(state: &Path, now: f64) -> std::time::Duration {
+    let next = fs::read(root(state).join("status.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v["next_refresh_gps"].as_f64());
+    next.filter(|t| (0. ..=86400.).contains(&(t - now)))
+        .map_or(std::time::Duration::ZERO, |t| {
+            std::time::Duration::from_secs_f64(t - now)
+        })
 }
 
 fn fingerprint(observed: &data::Observations, cache: &Path, cutoff: f64) -> Result<String> {
@@ -109,10 +126,17 @@ fn fingerprint(observed: &data::Observations, cache: &Path, cutoff: f64) -> Resu
         .filter(|s| s.time >= rapid_cutoff - 3. * data::DAY && s.time < rapid_cutoff)
         .collect();
     let mut bytes = serde_json::to_vec(&(selected, clocks))?;
+    let validation_clocks: Vec<_> = observed
+        .samples
+        .iter()
+        .filter(|s| s.time >= cutoff - 17. * data::DAY && s.time < cutoff)
+        .map(|s| (s.time, &s.clocks))
+        .collect();
+    bytes.extend(serde_json::to_vec(&validation_clocks)?);
     bytes.extend(fs::read(cache.join("egm96.zip"))?);
     bytes.extend(fs::read(cache.join("finals2000A.all"))?);
     // Bump this whenever fit/encoding policy changes to invalidate old cached fits.
-    bytes.extend_from_slice(b"toughfix-native-engine-v4-tg6-state-vectors");
+    bytes.extend_from_slice(b"toughfix-native-engine-v5-tg6-validated-linear-clocks");
     Ok(crate::camera::hash(&bytes))
 }
 
@@ -208,7 +232,13 @@ pub(super) fn publish(
             );
             bytes
         };
-        let (bytes, guard) = tg6::guard(&bytes, &guarded, &pointer["guard"])?;
+        let tg6_training = data::epoch(
+            meta["health_training_start_gps"]
+                .as_str()
+                .context("Missing TG-6 clock/orbit training epoch")?,
+        )?;
+        let (tg6_base, tg6_health) = health::guard(&guarded, tg6_training, snapshot, now)?;
+        let (bytes, guard) = tg6::guard(&bytes, &tg6_base, &tg6_health)?;
         let hash = crate::camera::hash(&bytes);
         let archive_name = format!("{hash}.cep");
         let path = root.join("archives").join(&archive_name);
@@ -297,7 +327,17 @@ pub fn preflight_for(state: &Path, model: CameraModel) -> Result<(Vec<u8>, Value
         bytes.len() == tg6::CAPACITY,
         "TG-6 prediction has the wrong transfer size"
     );
-    let (guarded, report) = tg6::guard(&bytes, &base, &pointer["guard"])?;
+    let training = data::epoch(
+        p["metrics"]["health_training_start_gps"]
+            .as_str()
+            .or_else(|| pointer["metrics"]["health_training_start_gps"].as_str())
+            .or_else(|| pointer["metrics"]["training_start_gps"].as_str())
+            .context("Missing TG-6 training epoch")?,
+    )?;
+    let snapshot: Snapshot =
+        serde_json::from_slice(&fs::read(root(state).join("data/health-state.json"))?)?;
+    let (base, base_health) = health::guard(&base, training, &snapshot, health::now()?)?;
+    let (guarded, report) = tg6::guard(&bytes, &base, &base_health)?;
     ensure!(
         guarded == bytes
             && report["upload_allowed"] == true
@@ -335,6 +375,27 @@ mod tests {
         predictor::{cep, health::Event},
         test_support::Temp,
     };
+    #[test]
+    fn source_schedule_honours_persisted_directory_and_refusal_deadlines() {
+        let temp = Temp::new();
+        let now = health::now().unwrap();
+        for (deadline, expected) in [
+            (Some(now + 3600.), 3600.),
+            (Some(now + 7200.), 7200.),
+            (Some(now - 1.), 0.),
+            (None, 0.),
+        ] {
+            files::json(
+                &root(temp.path()).join("status.json"),
+                &json!({"next_refresh_gps":deadline}),
+            )
+            .unwrap();
+            assert_eq!(
+                source_refresh_wait(temp.path(), now).as_secs_f64(),
+                expected
+            );
+        }
+    }
     fn seed(state: &Path) -> (Vec<u8>, Snapshot) {
         let now = health::now().unwrap();
         let start = (now / 900.).floor() * 900. - 86400.;
@@ -413,7 +474,7 @@ mod tests {
     #[test]
     fn tg6_preflight_is_model_specific_and_bound_to_current_guarded_native_file() {
         let temp = Temp::new();
-        let (base, _) = seed(temp.path());
+        let (base, mut snapshot) = seed(temp.path());
         let start = validation::start(&base).unwrap();
         let mut a =
             tg6::Archive::decode(include_bytes!("../../tests/fixtures/tg6-state-vectors.bin"))
@@ -449,6 +510,26 @@ mod tests {
             preflight_for(temp.path(), CameraModel::Tg6).unwrap().0,
             bytes
         );
+        // A TG-6-specific older clock fallback must expand only its own health
+        // scope. An event outside the TG-1 fit still invalidates that TG-6 file.
+        let now = snapshot.checked_at_gps;
+        pointer["metrics"]["training_start_gps"] = json!(data::calendar(now - 3. * data::DAY));
+        pointer["tg6"]["metrics"]["health_training_start_gps"] =
+            json!(data::calendar(now - 4. * data::DAY));
+        snapshot.orbit_events.push(Event {
+            prn: 1,
+            first_gps: now - 3.5 * data::DAY,
+            last_gps: now - 3.5 * data::DAY,
+            peak_innovation_m: 500.,
+            samples: 1,
+            reason: "clock-scope regression".into(),
+        });
+        files::json(&root(temp.path()).join("data/health-state.json"), &snapshot).unwrap();
+        files::json(&root(temp.path()).join("current.json"), &pointer).unwrap();
+        assert!(preflight_for(temp.path(), CameraModel::Tg1).is_ok());
+        assert!(preflight_for(temp.path(), CameraModel::Tg6).is_err());
+        snapshot.orbit_events.clear();
+        files::json(&root(temp.path()).join("data/health-state.json"), &snapshot).unwrap();
         pointer["tg6"]["base_sha256"] = json!("changed");
         files::json(&root(temp.path()).join("current.json"), &pointer).unwrap();
         assert!(preflight_for(temp.path(), CameraModel::Tg6).is_err());
@@ -518,7 +599,7 @@ mod tests {
             gzip.finish().unwrap();
         };
         let cutoff = data::epoch("2026-09-28T12:00:00").unwrap();
-        let observed = data::Observations {
+        let mut observed = data::Observations {
             samples: vec![data::Sample {
                 time: cutoff - 900.,
                 positions: vec![Some([26000000., 0., 0.]); 32],
@@ -530,6 +611,29 @@ mod tests {
         let first = fingerprint(&observed, temp.path(), cutoff).unwrap();
         write_rapid(2.);
         assert_ne!(first, fingerprint(&observed, temp.path(), cutoff).unwrap());
+        let recent_only = fingerprint(&observed, temp.path(), cutoff).unwrap();
+        observed.samples.insert(
+            0,
+            data::Sample {
+                time: cutoff - 10. * data::DAY,
+                positions: vec![None; 32],
+                clocks: vec![Some(1e-4); 32],
+            },
+        );
+        let with_history = fingerprint(&observed, temp.path(), cutoff).unwrap();
+        assert_ne!(recent_only, with_history);
+        observed.samples[0].clocks[0] = Some(2e-4);
+        let changed_history = fingerprint(&observed, temp.path(), cutoff).unwrap();
+        assert_ne!(with_history, changed_history);
+        observed.samples.push(data::Sample {
+            time: cutoff,
+            positions: vec![Some([26000000., 0., 0.]); 32],
+            clocks: vec![Some(1.); 32],
+        });
+        assert_eq!(
+            changed_history,
+            fingerprint(&observed, temp.path(), cutoff).unwrap()
+        );
     }
     #[test]
     fn cache_publication_rejects_traversal_corruption_and_overlapping_refreshes() {

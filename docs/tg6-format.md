@@ -194,8 +194,26 @@ native fit. The published TG-6 file is bound to the hash of the current native
 health-guarded archive. Only satellites usable in **both** guarded weeks are
 retained, because each TG-6 record spans the whole fortnight. Stale health,
 NANU outages, observed discontinuities, fewer than four eligible satellites,
-altered files, and cross-model file sizes block an upload. Selected quadratic
-clocks remain excluded instead of silently losing their quadratic term.
+altered files, and cross-model file sizes block an upload.
+
+The current encoder uses a **separate linear clock fit to observations**.
+The TG-1 predictor continues choosing between linear and quadratic models;
+that choice no longer determines TG-6 eligibility. Existing source-quality,
+freshness and clock-step checks apply to the TG-6 fit. Its held-out past-day
+prediction must have RMS error at most 50 ns. An additional historical test
+fits the three days preceding `cutoff - 14 days`, then predicts the entire
+following fortnight using no observations from that scored interval. It
+requires at least 1,120 observed samples, no gaps over one hour, observations
+through the last half hour, RMS error at most **50 ns**, and maximum absolute
+error at most **150 ns**. Missing evidence blocks the satellite. The three-day
+training arc and fortnight of validation require 17 days of observed data.
+
+These limits are conservative application heuristics; historical performance
+does not guarantee future clock accuracy. The fitted model, original source
+times, full-period score, and rejection reason are recorded. The selected
+linear fit is reanchored to the orbit start and quantized into the existing
+offset/drift fields. A TG-6 Rapid fallback's older training interval is included
+in its own health check, without changing TG-1 eligibility.
 
 The backend selects the prediction pointer and format by camera model. It
 uses the normal storage preparation/restoration, exclusive transport lock,

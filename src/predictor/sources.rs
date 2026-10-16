@@ -6,7 +6,7 @@ use super::{
 };
 use crate::files;
 use anyhow::{Context, Result, ensure};
-use chrono::{Datelike, Duration as Days, Utc};
+use chrono::{Datelike, Duration as Days, NaiveDate, Utc};
 use quick_xml::{Reader, events::Event};
 use rayon::prelude::*;
 use regex::Regex;
@@ -17,16 +17,235 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
 const NAVCEN: &str = "https://www.navcen.uscg.gov/sites/default/files/gps/";
+const CELESTRAK: &str = "https://celestrak.org/GPS/";
 const NOAA: &str = "https://noaa-cors-pds.s3.amazonaws.com/";
 const EOP: &str = "https://datacenter.iers.org/products/eop/rapid/standard/finals2000A.all";
 const EOP_BACKUP: &str = "https://maia.usno.navy.mil/ser7/finals2000A.all";
 const GRAVITY: &str = "https://earth-info.nga.mil/php/download.php?file=egm-96spherical";
 const GRAVITY_HASH: &str = "1f21ab8151c1b9fe25f483a4f6b78acdbf5306daf923725017b83d87a5f33472";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoticeSource {
+    Navcen,
+    Celestrak,
+}
+impl NoticeSource {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Navcen => "US Coast Guard NAVCEN",
+            Self::Celestrak => "CelesTrak mirror",
+        }
+    }
+    fn notice_url(self, number: &str) -> String {
+        match self {
+            Self::Navcen => format!("{NAVCEN}nanu/{}/{number}.nnu", &number[..4]),
+            Self::Celestrak => format!("{CELESTRAK}NANU/{}/nanu.{number}.txt", &number[..4]),
+        }
+    }
+}
+
+struct Document {
+    meta: Download,
+    text: String,
+}
+struct NoticeInputs {
+    source: NoticeSource,
+    latest: Document,
+    notice: Notice,
+    advisory: String,
+    checked_at_gps: f64,
+    next_check_at_gps: Option<f64>,
+}
+type DocumentFetcher<'a> = dyn FnMut(&str, &str, &str, bool) -> Result<Option<Document>> + 'a;
+
+fn required_document(
+    fetch: &mut DocumentFetcher<'_>,
+    key: &str,
+    url: &str,
+    file: &str,
+) -> Result<Document> {
+    fetch(key, url, file, false)?.context("Missing required satellite-health source")
+}
+
+fn advisory_date(text: &str, checked: f64) -> Result<NaiveDate> {
+    ensure!(
+        text.trim_start().starts_with("GPS OPERATIONAL ADVISORY"),
+        "Unexpected operational advisory format"
+    );
+    let date = Regex::new(r"SUBJ:\s*GPS STATUS\s+(\d{1,2}\s+\w{3}\s+\d{4})")?
+        .captures(text)
+        .context("Operational advisory lacks a date")?[1]
+        .to_string();
+    let date = NaiveDate::parse_from_str(&date, "%d %b %Y")?;
+    ensure!(
+        (-86400. ..=48. * 3600.)
+            .contains(&(checked - health::utc_gps(date.and_hms_opt(0, 0, 0).unwrap().and_utc())?)),
+        "Operational advisory is stale or future dated"
+    );
+    Ok(date)
+}
+
+fn mirror_catalog(text: &str, today: NaiveDate) -> Result<(String, String)> {
+    #[derive(Deserialize)]
+    struct Entry {
+        #[serde(rename = "FILE_NAME")]
+        file_name: String,
+    }
+    let entries: Vec<Entry> =
+        serde_json::from_str(text).context("Invalid CelesTrak GPS directory")?;
+    let nanu = Regex::new(r"^/GPS/NANU/(\d{4})/nanu\.(\d{7})\.txt$")?;
+    let status = Regex::new(r"^/GPS/status/(\d{4})/status\.(\d{8})\.txt$")?;
+    let mut numbers = Vec::new();
+    let mut advisories = Vec::new();
+    for entry in entries {
+        if let Some(c) = nanu.captures(&entry.file_name) {
+            let year: i32 = c[1].parse()?;
+            ensure!(
+                c[1] == c[2][..4] && &c[2][4..] != "000",
+                "Invalid NANU directory entry"
+            );
+            ensure!(year <= today.year(), "Future NANU directory entry");
+            if year >= today.year() - 1 {
+                numbers.push(c[2].to_owned());
+            }
+        } else if let Some(c) = status.captures(&entry.file_name) {
+            let day = NaiveDate::parse_from_str(&c[2], "%Y%m%d")?;
+            ensure!(
+                c[1] == c[2][..4] && day <= today,
+                "Invalid advisory directory entry"
+            );
+            advisories.push((day, entry.file_name));
+        }
+    }
+    let number = numbers
+        .into_iter()
+        .max()
+        .context("CelesTrak directory lacks a recent NANU")?;
+    let (_, advisory) = advisories
+        .into_iter()
+        .max()
+        .context("CelesTrak directory lacks a GPS advisory")?;
+    Ok((number, format!("https://celestrak.org{advisory}")))
+}
+
+fn notice_inputs_from(
+    source: NoticeSource,
+    fetch: &mut DocumentFetcher<'_>,
+    checked: f64,
+    today: NaiveDate,
+) -> Result<NoticeInputs> {
+    let catalog = if source == NoticeSource::Celestrak {
+        Some(required_document(
+            fetch,
+            "celestrak-gps-index",
+            &format!("{CELESTRAK}jsonDir.php"),
+            "celestrak-gps-index.json",
+        )?)
+    } else {
+        None
+    };
+    let mirror = catalog
+        .as_ref()
+        .map(|c| mirror_catalog(&c.text, today))
+        .transpose()?;
+    let latest = if source == NoticeSource::Navcen {
+        required_document(
+            fetch,
+            "current_nanu",
+            &format!("{NAVCEN}nanu/current_nanu.nnu"),
+            "current_nanu.nnu",
+        )?
+    } else {
+        let number = &mirror.as_ref().unwrap().0;
+        let latest = required_document(
+            fetch,
+            "current_nanu",
+            &source.notice_url(number),
+            &format!("notices/{number}.nnu"),
+        )?;
+        ensure!(
+            health::parse_notice(&latest.text, latest.meta.known_at_gps)?.number == *number,
+            "Mirror's latest NANU number does not match its index"
+        );
+        latest
+    };
+    let notice = health::parse_notice(&latest.text, latest.meta.known_at_gps)?;
+    let advisory = if source == NoticeSource::Navcen {
+        required_document(
+            fetch,
+            "operational_advisory",
+            &format!("{NAVCEN}opsadvisory/current_opsadvisory.oa1"),
+            "current_opsadvisory.oa1",
+        )?
+        .text
+    } else {
+        let url = &mirror.as_ref().unwrap().1;
+        let name = url.rsplit('/').next().unwrap();
+        let file = required_document(
+            fetch,
+            "operational_advisory",
+            url,
+            &format!("advisories/{name}"),
+        )?;
+        ensure!(
+            advisory_date(&file.text, checked)?
+                == NaiveDate::parse_from_str(&name[7..15], "%Y%m%d")?,
+            "Mirror advisory date does not match its filename"
+        );
+        file.text
+    };
+    advisory_date(&advisory, checked)?;
+    ensure!(
+        Regex::new(r"(?m)^(\d{7})\s")?
+            .captures_iter(&advisory)
+            .all(|c| c[1] <= *notice.number),
+        "Latest NANU index is behind the operational advisory"
+    );
+    let checked_at_gps = catalog
+        .as_ref()
+        .map_or(checked, |c| c.meta.retrieved_at_gps);
+    // document() checks cache age at read time. A new response can legitimately
+    // postdate the start of this refresh; keep that actual retrieval timestamp.
+    Ok(NoticeInputs {
+        source,
+        latest,
+        notice,
+        advisory,
+        checked_at_gps,
+        next_check_at_gps: catalog.map(|c| c.meta.retrieved_at_gps + 3600.),
+    })
+}
+
+fn notice_inputs(
+    fetch: &mut DocumentFetcher<'_>,
+    checked: f64,
+    today: NaiveDate,
+    progress: &(impl Fn(Progress) + Sync),
+) -> Result<NoticeInputs> {
+    let mut errors = Vec::new();
+    for source in [NoticeSource::Navcen, NoticeSource::Celestrak] {
+        progress(Progress::new(
+            RefreshStage::SatelliteHealth,
+            format!("Checking satellite notices from {}", source.name()),
+        ));
+        match notice_inputs_from(source, fetch, checked, today) {
+            Ok(inputs) => return Ok(inputs),
+            Err(error) => {
+                eprintln!(
+                    "ToughFix: {} health source failed: {error:#}",
+                    source.name()
+                );
+                errors.push(format!("{}: {error:#}", source.name()));
+            }
+        }
+    }
+    anyhow::bail!("Satellite-health downloads failed ({})", errors.join("; "))
+}
 
 fn earth_orientation(
     mut download: impl FnMut(&str) -> Result<Download>,
@@ -56,10 +275,29 @@ pub struct Download {
     pub known_at_gps: f64,
     pub http_last_modified: Option<String>,
 }
+#[derive(Debug)]
+struct HttpFailure {
+    url: String,
+    status: StatusCode,
+}
+impl std::fmt::Display for HttpFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Source {} returned {}", self.url, self.status)
+    }
+}
+impl std::error::Error for HttpFailure {}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct DownloadBackoff {
+    until_gps: f64,
+    message: String,
+}
 pub struct Sources {
     root: PathBuf,
     client: Client,
     manifest: BTreeMap<String, Download>,
+    celestrak_backoff: Mutex<Option<DownloadBackoff>>,
+    next_check_at_gps: Option<f64>,
 }
 impl Sources {
     pub fn new(root: &Path) -> Result<Self> {
@@ -74,17 +312,74 @@ impl Sources {
             // time for DNS retries and slow connection setup as well as transfer.
             .connect_timeout(Duration::from_secs(30))
             .timeout(Duration::from_secs(90))
-            .redirect(Policy::limited(5))
+            .redirect(Policy::custom(|attempt| {
+                if attempt
+                    .previous()
+                    .iter()
+                    .any(|u| u.host_str() == Some("celestrak.org"))
+                {
+                    attempt.stop()
+                } else {
+                    Policy::limited(5).redirect(attempt)
+                }
+            }))
             .build()?;
         let manifest = fs::read(root.join("manifest.json"))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
+        let backoff = fs::read(root.join("celestrak-backoff.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .or_else(|| {
+                // Honour a refusal recorded by older versions, before this
+                // persistent gate existed. Restarting must not prolong a block.
+                let state: Snapshot =
+                    serde_json::from_slice(&fs::read(root.join("health-state.json")).ok()?).ok()?;
+                let message = state.refresh_error?;
+                let refusal = message
+                    .rsplit("; CelesTrak mirror: ")
+                    .next()
+                    .unwrap_or(&message);
+                (refusal.contains("celestrak.org") && refusal.contains("403 Forbidden")).then_some(
+                    DownloadBackoff {
+                        until_gps: state.checked_at_gps + 7200.,
+                        message,
+                    },
+                )
+            });
+        if let Some(backoff) = &backoff {
+            files::json(&root.join("celestrak-backoff.json"), backoff)?;
+        }
         Ok(Self {
             root: root.into(),
             client,
             manifest,
+            celestrak_backoff: Mutex::new(backoff),
+            next_check_at_gps: None,
         })
+    }
+    pub fn next_refresh_at(&self, successful: bool) -> Option<f64> {
+        if successful {
+            self.next_check_at_gps
+        } else {
+            self.celestrak_backoff
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|b| b.until_gps)
+        }
+    }
+    fn check_celestrak_backoff(&self, now: f64) -> Result<()> {
+        if let Some(b) = self.celestrak_backoff.lock().unwrap().as_ref() {
+            ensure!(
+                now >= b.until_gps,
+                "CelesTrak downloads paused for {} more seconds after a server refusal: {}",
+                (b.until_gps - now).ceil() as u64,
+                b.message
+            );
+        }
+        Ok(())
     }
     fn fetch(&self, url: &str, file: &str, missing_ok: bool) -> Result<Option<Download>> {
         ensure!(
@@ -104,6 +399,11 @@ impl Sources {
                         "ToughFix: source download attempt {attempt}/2 failed after {:.1}s: {e:#}",
                         started.elapsed().as_secs_f64()
                     );
+                    // An HTTP refusal is not a transient connection failure.
+                    // Repeating it can turn a temporary refusal into an IP ban.
+                    if e.downcast_ref::<HttpFailure>().is_some() {
+                        return Err(e);
+                    }
                     last = Some(e);
                 }
             }
@@ -111,19 +411,38 @@ impl Sources {
         Err(last.unwrap())
     }
     fn fetch_once(&self, url: &str, file: &str, missing_ok: bool) -> Result<Option<Download>> {
+        let celestrak = url.starts_with(CELESTRAK);
+        if celestrak {
+            self.check_celestrak_backoff(health::now()?)?;
+        }
         let mut response = self
             .client
             .get(url)
             .send()
             .with_context(|| format!("Downloading {url}"))?;
+        if response.status() != StatusCode::OK && celestrak {
+            let error = HttpFailure {
+                url: url.into(),
+                status: response.status(),
+            };
+            let backoff = DownloadBackoff {
+                until_gps: health::now()? + 7200.,
+                message: error.to_string(),
+            };
+            files::json(&self.root.join("celestrak-backoff.json"), &backoff)?;
+            *self.celestrak_backoff.lock().unwrap() = Some(backoff);
+            return Err(error.into());
+        }
         if missing_ok && response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        ensure!(
-            response.status() == StatusCode::OK,
-            "Source {url} returned {}",
-            response.status()
-        );
+        if response.status() != StatusCode::OK {
+            return Err(HttpFailure {
+                url: url.into(),
+                status: response.status(),
+            }
+            .into());
+        }
         ensure!(
             response
                 .content_length()
@@ -182,6 +501,74 @@ impl Sources {
         self.manifest.insert(key.into(), m.clone());
         Ok(m)
     }
+    fn cached_notice(&self, number: &str, checked: f64) -> Option<Download> {
+        // Numbered NANUs are published once. Freshness comes from the latest
+        // directory/advisory, not from downloading unchanged history each day.
+        // Preserve the original provenance and verify the bytes on every read.
+        self.cached(number, f64::INFINITY, checked)
+    }
+    fn document(
+        &mut self,
+        key: &str,
+        url: &str,
+        file: &str,
+        missing_ok: bool,
+    ) -> Result<Option<Document>> {
+        let now = health::now()?;
+        let cached = if url.starts_with(CELESTRAK) {
+            self.check_celestrak_backoff(now)?;
+            if key == "celestrak-gps-index" {
+                self.cached(key, 3600., now).filter(|m| m.url == url)
+            } else if key == "current_nanu" {
+                let number = url
+                    .rsplit('/')
+                    .next()
+                    .unwrap()
+                    .strip_prefix("nanu.")
+                    .and_then(|s| s.strip_suffix(".txt"))
+                    .context("Invalid mirror NANU URL")?;
+                self.cached_notice(number, now).or_else(|| {
+                    self.cached(key, f64::INFINITY, now)
+                        .filter(|m| m.url == url)
+                })
+            } else {
+                self.cached(file, f64::INFINITY, now)
+                    .filter(|m| m.url == url)
+                    .or_else(|| {
+                        self.cached(key, f64::INFINITY, now)
+                            .filter(|m| m.url == url)
+                    })
+            }
+        } else {
+            None
+        };
+        let meta = match cached {
+            Some(meta) => Some(meta),
+            None => self.fetch(url, file, missing_ok)?,
+        };
+        let Some(mut meta) = meta else {
+            return Ok(None);
+        };
+        let text = fs::read_to_string(self.root.join(&meta.file))?;
+        if url.starts_with(CELESTRAK) && meta.file != file {
+            // Migrate mutable legacy aliases to the dated/numbered cache path.
+            files::atomic(&self.root.join(file), text.as_bytes())?;
+            meta.file = file.into();
+        }
+        self.manifest.insert(key.into(), meta.clone());
+        if url.starts_with(CELESTRAK) && key == "current_nanu" {
+            let notice = health::parse_notice(&text, meta.known_at_gps)?;
+            ensure!(
+                url == NoticeSource::Celestrak.notice_url(&notice.number),
+                "Mirror notice number mismatch"
+            );
+            self.manifest.insert(notice.number, meta.clone());
+        }
+        if url.starts_with(CELESTRAK) && key == "operational_advisory" {
+            self.manifest.insert(file.into(), meta.clone());
+        }
+        Ok(Some(Document { meta, text }))
+    }
     pub fn refresh(&mut self, progress: &(impl Fn(Progress) + Sync)) -> Result<Snapshot> {
         let previous: Option<Snapshot> = fs::read(self.root.join("health-state.json"))
             .ok()
@@ -223,37 +610,18 @@ impl Sources {
         progress: &(impl Fn(Progress) + Sync),
     ) -> Result<Snapshot> {
         let checked = health::now()?;
-        progress(Progress::new(
-            RefreshStage::SatelliteHealth,
-            "Checking official satellite notices",
-        ));
-        let latest = self.required(
-            "current_nanu",
-            &format!("{NAVCEN}nanu/current_nanu.nnu"),
-            "current_nanu.nnu",
+        let inputs = notice_inputs(
+            &mut |key, url, file, missing_ok| self.document(key, url, file, missing_ok),
+            checked,
+            Utc::now().date_naive(),
+            progress,
         )?;
-        let latest_notice = health::parse_notice(
-            &fs::read_to_string(self.root.join(&latest.file))?,
-            latest.known_at_gps,
-        )?;
-        let advisory = self.required(
-            "operational_advisory",
-            &format!("{NAVCEN}opsadvisory/current_opsadvisory.oa1"),
-            "current_opsadvisory.oa1",
-        )?;
-        let advisory = fs::read_to_string(self.root.join(advisory.file))?;
-        let date = Regex::new(r"SUBJ:\s*GPS STATUS\s+(\d{1,2}\s+\w{3}\s+\d{4})")?
-            .captures(&advisory)
-            .context("Operational advisory lacks a date")?[1]
-            .to_string();
-        let date = chrono::NaiveDate::parse_from_str(&date, "%d %b %Y")?
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc();
-        ensure!(
-            (-86400. ..=48. * 3600.).contains(&(checked - health::utc_gps(date)?)),
-            "Operational advisory is stale or future dated"
-        );
+        self.next_check_at_gps = inputs.next_check_at_gps;
+        let notice_checked = inputs.checked_at_gps;
+        let source = inputs.source;
+        let latest = inputs.latest.meta;
+        let latest_notice = inputs.notice;
+        let advisory = inputs.advisory;
         let number_pattern = Regex::new(r"^\d{7}$")?;
         let year: &str = &latest_notice.number[..4];
         let last: usize = latest_notice.number[4..].parse()?;
@@ -281,7 +649,6 @@ impl Sources {
             .insert(latest_notice.number.clone(), Download { file, ..latest });
         let mut seen = BTreeSet::new();
         let mut notices: Vec<Notice> = Vec::new();
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
         loop {
             let todo: Vec<_> = numbers.difference(&seen).cloned().collect();
             if todo.is_empty() {
@@ -291,51 +658,26 @@ impl Sources {
                 numbers.len() <= 2000,
                 "NANU reference chain is unexpectedly large"
             );
-            let failed = AtomicBool::new(false);
-            let results: Vec<_> = pool.install(|| {
-                todo.par_iter()
-                    .filter_map(|n| {
-                        if failed.load(Ordering::Relaxed) {
-                            return None;
-                        }
-                        let result = (|| -> Result<_> {
-                            let file = format!("notices/{n}.nnu");
-                            let url = format!("{NAVCEN}nanu/{}/{n}.nnu", &n[..4]);
-                            let m = match self.cached(n, 86400., checked) {
-                                Some(m) => m,
-                                None => self.fetch(&url, &file, false)?.context("Missing NANU")?,
-                            };
-                            let notice = health::parse_notice(
-                                &fs::read_to_string(self.root.join(&m.file))?,
-                                m.known_at_gps,
-                            )?;
-                            ensure!(notice.number == *n, "Archive notice number mismatch");
-                            Ok((n.clone(), m, notice))
-                        })();
-                        if result.is_err() {
-                            failed.store(true, Ordering::Relaxed);
-                        }
-                        Some(result)
-                    })
-                    .collect()
-            });
-            // Retain successful requests even if a sibling request fails.
-            let mut error = None;
-            for result in results {
-                match result {
-                    Ok((n, m, notice)) => {
-                        self.manifest.insert(n.clone(), m);
-                        seen.insert(n);
-                        if let Some(r) = &notice.reference {
-                            numbers.insert(r.clone());
-                        }
-                        notices.push(notice);
-                    }
-                    Err(e) => error = Some(e),
+            // Sequential requests let the first HTTP refusal stop the archive
+            // immediately. Persist each success even if a later notice fails.
+            for n in todo {
+                let file = format!("notices/{n}.nnu");
+                let url = source.notice_url(&n);
+                let m = match self.cached_notice(&n, checked) {
+                    Some(m) => m,
+                    None => self.fetch(&url, &file, false)?.context("Missing NANU")?,
+                };
+                let notice = health::parse_notice(
+                    &fs::read_to_string(self.root.join(&m.file))?,
+                    m.known_at_gps,
+                )?;
+                ensure!(notice.number == n, "Archive notice number mismatch");
+                self.manifest.insert(n.clone(), m);
+                seen.insert(n);
+                if let Some(r) = &notice.reference {
+                    numbers.insert(r.clone());
                 }
-            }
-            if let Some(e) = error {
-                return Err(e);
+                notices.push(notice);
             }
             progress(Progress::new(
                 RefreshStage::SatelliteHealth,
@@ -348,7 +690,10 @@ impl Sources {
             "Downloading observed GPS orbits from NOAA / IGS",
         ));
         let today = Utc::now().date_naive();
-        let jobs: Vec<_> = (0..7)
+        // Three days to fit, fourteen held-out days to validate TG-6 clocks,
+        // and two days for normal orbit-product latency. Older daily products
+        // are immutable cached evidence and are not downloaded each refresh.
+        let jobs: Vec<_> = (0..=19)
             .map(|offset| {
                 let d = today - Days::days(offset);
                 let name = format!(
@@ -360,9 +705,19 @@ impl Sources {
                 (name, url)
             })
             .collect();
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
         let results: Vec<_> = pool.install(|| {
             jobs.par_iter()
-                .map(|(name, url)| self.fetch(url, name, true))
+                .enumerate()
+                .map(|(offset, (name, url))| {
+                    if offset >= 7
+                        && let Some(cached) = self.cached(name, f64::INFINITY, checked)
+                    {
+                        Ok(Some(cached))
+                    } else {
+                        self.fetch(url, name, true)
+                    }
+                })
                 .collect()
         });
         for r in results {
@@ -458,7 +813,7 @@ impl Sources {
         let state = Snapshot {
             schema_version: 1,
             refresh_ok: true,
-            checked_at_gps: checked,
+            checked_at_gps: notice_checked,
             latest_observed_gps: latest,
             latest_observed_by_prn: by_prn,
             notices,
@@ -546,6 +901,363 @@ pub fn ultra_epoch(key: &str) -> Result<i64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mirror_cache_reuses_numbered_and_dated_files_without_renewing_health_time() {
+        let temp = crate::test_support::Temp::new();
+        let mut source = Sources::new(temp.path()).unwrap();
+        // A cache regression fails locally, never by querying the public site.
+        source.client = Client::builder()
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:9").unwrap())
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let now = health::now().unwrap();
+        let day = Utc::now().date_naive();
+        let number = format!("{}002", day.year());
+        let index_url = format!("{CELESTRAK}jsonDir.php");
+        let notice_url = NoticeSource::Celestrak.notice_url(&number);
+        let status_url = format!(
+            "{CELESTRAK}status/{}/status.{}.txt",
+            day.year(),
+            day.format("%Y%m%d")
+        );
+        for (key, url, file, text, retrieved) in [
+            (
+                "celestrak-gps-index",
+                index_url.as_str(),
+                "celestrak-gps-index.json",
+                catalog(day, &number),
+                now - 1800.,
+            ),
+            (
+                number.as_str(),
+                notice_url.as_str(),
+                "notices/old.nnu",
+                notice(&number),
+                now - 2. * 86400.,
+            ),
+            (
+                "operational_advisory",
+                status_url.as_str(),
+                "current_opsadvisory.oa1",
+                advisory(day, &number),
+                now - 1800.,
+            ),
+        ] {
+            files::atomic(&temp.path().join(file), text.as_bytes()).unwrap();
+            source
+                .manifest
+                .insert(key.into(), document(url, file, text, retrieved).meta);
+        }
+        for _ in 0..2 {
+            let inputs = notice_inputs_from(
+                NoticeSource::Celestrak,
+                &mut |key, url, file, missing| source.document(key, url, file, missing),
+                now,
+                day,
+            )
+            .unwrap();
+            assert_eq!(inputs.checked_at_gps, now - 1800.);
+            assert_eq!(inputs.next_check_at_gps, Some(now + 1800.));
+            assert_eq!(inputs.latest.meta.retrieved_at_gps, now - 2. * 86400.);
+            assert_eq!(inputs.latest.meta.file, format!("notices/{number}.nnu"));
+        }
+        assert!(
+            source
+                .cached("celestrak-gps-index", 3600., now + 1800.)
+                .is_none()
+        );
+        files::atomic(
+            &temp.path().join(format!("notices/{number}.nnu")),
+            b"altered",
+        )
+        .unwrap();
+        assert!(source.cached_notice(&number, now).is_none());
+    }
+
+    #[test]
+    fn celestrak_refusal_cooldown_survives_restarts_without_extending_the_block() {
+        let temp = crate::test_support::Temp::new();
+        let checked = health::now().unwrap() - 120.;
+        let state = serde_json::json!({
+            "schema_version":1, "refresh_ok":false, "checked_at_gps":checked,
+            "latest_observed_gps":checked, "latest_observed_by_prn":{},
+            "notices":[], "orbit_events":[], "latest_nanu":"",
+            "refresh_error":"Source https://celestrak.org/GPS/NANU/2026/ returned 403 Forbidden"
+        });
+        files::json(&temp.path().join("health-state.json"), &state).unwrap();
+        let first = Sources::new(temp.path()).unwrap();
+        assert_eq!(first.next_refresh_at(false), Some(checked + 7200.));
+        assert!(first.check_celestrak_backoff(checked + 7199.).is_err());
+        let mut later_state = state;
+        later_state["checked_at_gps"] = (checked + 60.).into();
+        files::json(&temp.path().join("health-state.json"), &later_state).unwrap();
+        let mut restarted = Sources::new(temp.path()).unwrap();
+        assert_eq!(restarted.next_refresh_at(false), Some(checked + 7200.));
+        assert!(restarted.check_celestrak_backoff(checked + 7200.).is_ok());
+        let error = restarted
+            .document(
+                "celestrak-gps-index",
+                &format!("{CELESTRAK}jsonDir.php"),
+                "index.json",
+                false,
+            )
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("downloads paused"));
+    }
+
+    #[test]
+    fn http_refusals_are_not_immediately_retried() {
+        use std::{io::Write, net::TcpListener};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/notice", listener.local_addr().unwrap());
+        let temp = crate::test_support::Temp::new();
+        let mut source = Sources::new(temp.path()).unwrap();
+        source.client = Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut connection, _) = listener.accept().unwrap();
+            connection
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 4096];
+            assert!(connection.read(&mut request).unwrap() > 0);
+            connection
+                .write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+            drop(connection);
+            listener
+        });
+        let error = source.fetch(&url, "notice.nnu", false).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<HttpFailure>().unwrap().status,
+            StatusCode::FORBIDDEN
+        );
+        let listener = server.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn mirror_directory_rejects_missing_unsafe_and_inconsistent_entries() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 16).unwrap();
+        for text in [
+            "[]".to_owned(),
+            "<html>Denied</html>".into(),
+            catalog(day, "2026000"),
+            catalog(day, "2027001"),
+            catalog(day, "2026002").replace("/NANU/2026/", "/NANU/2025/"),
+            catalog(day, "2026002").replace("/GPS/status/2026/", "https://other.example/"),
+            catalog(day + Days::days(1), "2026002"),
+        ] {
+            assert!(mirror_catalog(&text, day).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn historical_notice_cache_preserves_integrity_without_renewing_current_checks() {
+        let temp = crate::test_support::Temp::new();
+        let mut source = Sources::new(temp.path()).unwrap();
+        let checked = 1_400_000_000.;
+        for number in ["2025001", "2026001"] {
+            let file = format!("notices/{number}.nnu");
+            let text = notice(number);
+            files::atomic(&temp.path().join(&file), text.as_bytes()).unwrap();
+            let meta = document(
+                &NoticeSource::Navcen.notice_url(number),
+                &file,
+                text,
+                checked - 2. * 86400.,
+            )
+            .meta;
+            source.manifest.insert(number.into(), meta);
+        }
+        let historical = source.cached_notice("2025001", checked).unwrap();
+        assert_eq!(historical.retrieved_at_gps, checked - 2. * 86400.);
+        assert_eq!(
+            source
+                .cached_notice("2026001", checked)
+                .unwrap()
+                .retrieved_at_gps,
+            checked - 2. * 86400.
+        );
+        files::atomic(&temp.path().join(&historical.file), b"altered").unwrap();
+        assert!(source.cached_notice("2025001", checked).is_none());
+    }
+
+    fn document(url: &str, file: &str, text: String, checked: f64) -> Document {
+        Document {
+            meta: Download {
+                file: file.into(),
+                url: url.into(),
+                bytes: text.len(),
+                sha256: crate::camera::hash(text.as_bytes()),
+                retrieved_at_gps: checked,
+                known_at_gps: checked,
+                http_last_modified: None,
+            },
+            text,
+        }
+    }
+    fn notice(number: &str) -> String {
+        format!("NOTICE ADVISORY TO NAVSTAR USERS (NANU) {number} NANU TYPE: GENERAL\nPRN 39\n")
+    }
+    fn catalog(day: NaiveDate, number: &str) -> String {
+        serde_json::json!([
+            {"FILE_NAME": format!("/GPS/NANU/{}/nanu.{number}.txt", &number[..4])},
+            {"FILE_NAME": format!("/GPS/status/{}/status.{}.txt", day.year(), day.format("%Y%m%d"))}
+        ])
+        .to_string()
+    }
+    fn advisory(day: NaiveDate, number: &str) -> String {
+        format!(
+            "GPS OPERATIONAL ADVISORY\nSUBJ: GPS STATUS {}\n{number} active notice\n",
+            day.format("%d %b %Y").to_string().to_uppercase()
+        )
+    }
+
+    #[test]
+    fn navcen_failure_uses_validated_mirror_and_records_the_actual_source() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 16).unwrap();
+        let checked = health::utc_gps(day.and_hms_opt(12, 0, 0).unwrap().and_utc()).unwrap();
+        for primary_fails in [false, true] {
+            let mut urls = Vec::new();
+            let inputs = notice_inputs(
+                &mut |key, url, file, _| {
+                    urls.push(url.to_owned());
+                    if primary_fails && url.starts_with(NAVCEN) {
+                        anyhow::bail!("403 Forbidden");
+                    }
+                    let text = match key {
+                        "current_nanu" => notice("2026002"),
+                        "operational_advisory" => advisory(day, "2026002"),
+                        "celestrak-gps-index" => catalog(day, "2026002"),
+                        _ => anyhow::bail!("Unexpected request {url}"),
+                    };
+                    Ok(Some(document(url, file, text, checked)))
+                },
+                checked,
+                day,
+                &|_| {},
+            )
+            .unwrap();
+            let expected = if primary_fails {
+                NoticeSource::Celestrak
+            } else {
+                NoticeSource::Navcen
+            };
+            assert_eq!(inputs.source, expected);
+            assert_eq!(inputs.notice.number, "2026002");
+            assert!(inputs.latest.meta.url.starts_with(if primary_fails {
+                CELESTRAK
+            } else {
+                NAVCEN
+            }));
+            assert_eq!(urls.len(), if primary_fails { 4 } else { 2 });
+            assert_eq!(
+                inputs.source.notice_url("2025001"),
+                if primary_fails {
+                    format!("{CELESTRAK}NANU/2025/nanu.2025001.txt")
+                } else {
+                    format!("{NAVCEN}nanu/2025/2025001.nnu")
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn mirror_cannot_clear_missing_malformed_stale_or_inconsistent_health_data() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 16).unwrap();
+        let checked = health::utc_gps(day.and_hms_opt(12, 0, 0).unwrap().and_utc()).unwrap();
+        for failure in [
+            "unavailable",
+            "bad-index",
+            "wrong-notice",
+            "stale",
+            "future",
+            "html",
+            "behind",
+        ] {
+            let error = notice_inputs(
+                &mut |key, url, file, _| {
+                    if url.starts_with(NAVCEN) || failure == "unavailable" {
+                        anyhow::bail!("Source {url} returned 403 Forbidden");
+                    }
+                    let text = match key {
+                        "celestrak-gps-index" if failure == "bad-index" => {
+                            "<html>Access denied</html>".into()
+                        }
+                        "celestrak-gps-index" => catalog(day, "2026002"),
+                        "current_nanu" => notice(if failure == "wrong-notice" {
+                            "2026001"
+                        } else {
+                            "2026002"
+                        }),
+                        "operational_advisory" => match failure {
+                            "stale" => advisory(day - Days::days(4), "2026002"),
+                            "future" => advisory(day + Days::days(4), "2026002"),
+                            "html" => "<html>Access denied</html>".into(),
+                            "behind" => advisory(day, "2026003"),
+                            _ => advisory(day, "2026002"),
+                        },
+                        _ => anyhow::bail!("Unexpected request {url}"),
+                    };
+                    Ok(Some(document(url, file, text, checked)))
+                },
+                checked,
+                day,
+                &|_| {},
+            )
+            .err()
+            .expect("Invalid health inputs must fail closed");
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("US Coast Guard NAVCEN"),
+                "{failure}: {message}"
+            );
+            assert!(message.contains("CelesTrak mirror"), "{failure}: {message}");
+        }
+    }
+
+    #[test]
+    fn mirror_uses_published_directory_entries_at_year_rollover_without_404_probes() {
+        let day = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let checked = health::utc_gps(day.and_hms_opt(12, 0, 0).unwrap().and_utc()).unwrap();
+        let mut urls = Vec::new();
+        let inputs = notice_inputs(
+            &mut |key, url, file, missing_ok| {
+                urls.push(url.to_owned());
+                if url.starts_with(NAVCEN) {
+                    anyhow::bail!("403 Forbidden")
+                }
+                assert!(!missing_ok);
+                let text = match key {
+                    "celestrak-gps-index" => catalog(day - Days::days(1), "2025002"),
+                    "current_nanu" => notice("2025002"),
+                    "operational_advisory" => advisory(day - Days::days(1), "2025002"),
+                    _ => anyhow::bail!("Unexpected request {url}"),
+                };
+                Ok(Some(document(url, file, text, checked)))
+            },
+            checked,
+            day,
+            &|_| {},
+        )
+        .unwrap();
+        assert_eq!(inputs.notice.number, "2025002");
+        assert!(urls.contains(&format!("{CELESTRAK}status/2025/status.20251231.txt")));
+        assert_eq!(urls.len(), 4);
+    }
+
     #[test]
     fn official_earth_orientation_mirror_records_its_source_and_only_falls_back_on_failure() {
         for fail_primary in [false, true] {

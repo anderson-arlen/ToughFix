@@ -11,7 +11,8 @@ updater nor any outside prediction service is needed.
 TG-1 and TG-6 GPS updates are supported. TG-6 native independent generation,
 live satellite-health checks, and USB upload were tested on firmware 1.00.
 The camera accepted the generated file, and the owner reported an outdoor
-GPS fix in roughly five seconds afterward. See the [TG-6 validation record](docs/tg6-format.md#native-integration-and-hardware-validation).
+GPS fix in roughly five seconds afterward. Acquisition improvement still needs
+a controlled comparison. See the [TG-6 validation record](docs/tg6-format.md#native-integration-and-hardware-validation).
 
 The Olympus Stylus Tough-8010 is also supported for battery, firmware, and
 storage status. It has no GPS receiver and receives no assistance updates.
@@ -206,12 +207,26 @@ from a worldwide network to produce precise satellite orbit and clock products.
 | Observed GPS positions and clocks | IGS products distributed through [NOAA's public archive](https://www.ngs.noaa.gov/CORS/data.shtml) | Three days of 15-minute observations: Rapid preferred on overlap, observed Ultra-rapid extends the arc; also used for health checks |
 | Earth's gravity field | [NGA EGM96](https://earth-info.nga.mil/index.php?dir=wgs84&action=wgs84) | Gravity coefficients through degree and order 8 |
 | Earth orientation | [IERS official mirror](https://datacenter.iers.org/products/eop/rapid/standard/), with [USNO](https://maia.usno.navy.mil/) as backup | The same `finals2000A.all` polar-motion and UT1−UTC data for Earth-fixed/inertial transformations |
-| Satellite health and maneuver notices | [US Coast Guard NAVCEN](https://www.navcen.uscg.gov/gps-nanus-almanacs-opsadvisories-sof) | Outage, maintenance, and maneuver quarantine |
+| Satellite health and maneuver notices | [US Coast Guard NAVCEN](https://www.navcen.uscg.gov/gps-nanus-almanacs-opsadvisories-sof), with the [CelesTrak mirror](https://celestrak.org/GPS/) as backup | Outage, maintenance, and maneuver quarantine |
 
 NOAA distributes the orbit products; it is not their sole producer. Predicted
 samples in source SP3 products are rejected. Downloads have recorded source
 URLs, retrieval times, sizes, and SHA-256 hashes. The NGA archive is read only
 for its gravity coefficient text; its included programs are never run.
+
+If NAVCEN is unavailable, ToughFix checks CelesTrak's copies of the NANUs and
+daily GPS operational advisories. The fallback validates the advisory's date,
+the latest notice number, and every required notice and reference through the
+same health policy. Missing, malformed, stale, or inconsistent inputs block
+uploads. Actual source URLs and hashes are retained in the download manifest.
+Numbered NANUs and dated mirror advisories are downloaded once and reused from
+the hash-verified cache with their original retrieval times. CelesTrak's published
+GPS directory identifies the latest notice and advisory; it is queried at most
+once per hour, following its [usage policy](https://celestrak.org/usage-policy.php).
+Reusing a directory retains its actual check time and does not renew the
+one-hour health requirement for camera uploads. HTTP refusals are not retried
+immediately. A CelesTrak refusal pauses its downloads for two hours, persists
+across restarts, and stops the current archive download at the first failure.
 
 ```mermaid
 flowchart TD
@@ -260,6 +275,22 @@ tested using an earlier part of the same past-only observation arc. A quadratic
 is selected only when it materially improves the held-out past-day prediction;
 the selected model is refitted to the full three days. Future observations never
 select or fit either the orbit or clock model.
+
+The TG-6 receives a separately fitted linear clock model, matching its offset
+and drift fields. A TG-1 quadratic selection does not exclude that satellite.
+The TG-6 fit must pass the existing source-quality checks and a held-out
+past-day RMS limit of 50 ns. A separate historical test fits three days ending
+14 days before the current cutoff and predicts the following full fortnight;
+the observed clock errors must stay within 50 ns RMS and 150 ns maximum.
+That test requires 17 days of observations. Older daily Rapid products are
+downloaded once and verified from cache thereafter. These are quality
+heuristics based on past observations, not guarantees about future error.
+Current data, historical scores, source hashes, and rejection reasons are
+retained in the diagnostics. TG-6 clock fallbacks expand its own satellite-health
+check to include their training interval.
+An [audit across 106 days of observations](docs/tg6-accuracy.md#does-past-clock-prediction-error-predict-the-next-forecast-2026-10-16)
+finds that earlier failures strongly predict fourteen-day errors, while almost
+all still meet the same error limits over the following one to three days.
 
 Clock inputs have a separate quality decision for each satellite. A newer
 observed clock fit is accepted when its residual RMS is at most

@@ -312,8 +312,8 @@ fn ancillary(start: f64, days: usize, frames: &Frames) -> Result<Vec<Table>> {
     ])
 }
 
-/// Export the independently fitted native states; do not silently linearize a
-/// quadratic clock. Receiver-side conventions are documented in tg6-format.md.
+/// Export native orbit states with a separate, observed-data linear clock fit
+/// validated over a past fortnight. TG-1's selected clock model is independent.
 pub fn generate(diagnostics: &Value, metrics: &Value, eop: &Path) -> Result<(Vec<u8>, Value)> {
     let start = data::epoch(
         diagnostics["forecast_start_gps"]
@@ -333,6 +333,13 @@ pub fn generate(diagnostics: &Value, metrics: &Value, eop: &Path) -> Result<(Vec
     ensure!(available.len() >= 2, "Missing native two-week coverage");
     let mut records = Vec::new();
     let mut exclusions = Vec::new();
+    let mut clock_reports = Vec::new();
+    let mut health_start = data::epoch(
+        metrics["health_training_start_gps"]
+            .as_str()
+            .or_else(|| metrics["training_start_gps"].as_str())
+            .context("Missing native training epoch")?,
+    )?;
     for s in diagnostics["satellites"]
         .as_array()
         .context("Missing native satellite diagnostics")?
@@ -345,12 +352,16 @@ pub fn generate(diagnostics: &Value, metrics: &Value, eop: &Path) -> Result<(Vec
                     .all(|w| w.as_array().is_some_and(|a| a.contains(&json!(prn)))),
                 "Not usable throughout the native two-week forecast"
             );
-            let clock = &s["clock"];
-            let c: Vec<f64> = serde_json::from_value(clock["coefficients"].clone())?;
             ensure!(
-                c.len() == 3 && clock["degree"] == 1 && c[2] == 0.,
-                "Quadratic clock is not representable in the TG-6 linear format"
+                s["tg6_clock"].is_object(),
+                "{}",
+                s["tg6_clock_error"]
+                    .as_str()
+                    .unwrap_or("Regenerate predictions with a validated TG-6 linear clock fit")
             );
+            let clock: super::clocks::Tg6Clock = serde_json::from_value(s["tg6_clock"].clone())?;
+            clock.validate(start)?;
+            let c = clock.model.coefficients;
             let rows = s["trajectory_2h_gcrs"]
                 .as_array()
                 .context("Missing two-hour native states")?;
@@ -365,14 +376,19 @@ pub fn generate(diagnostics: &Value, metrics: &Value, eop: &Path) -> Result<(Vec
                 }
                 states.push(state);
             }
-            Ok(Record {
+            let record = Record {
                 prn: u16::try_from(prn)?,
                 clock_epoch: ticks(start)?,
                 bias: integer(c[0] - c[1] * 10800., 1e12)?,
                 rate: integer(c[1], 1e20)?,
                 state_epoch: ticks(start)?,
                 states,
-            })
+            };
+            health_start = health_start.min(clock.model.training_start_gps_seconds);
+            clock_reports.push(json!({"prn":prn,"source":clock.model.source,
+                "training_rms_ns":clock.model.training_rms_ns,"past_day_validation_ns":clock.model.past_day_validation_ns[0],
+                "forecast_validation":clock.validation}));
+            Ok(record)
         })();
         match attempt {
             Ok(r) => records.push(r),
@@ -394,6 +410,11 @@ pub fn generate(diagnostics: &Value, metrics: &Value, eop: &Path) -> Result<(Vec
     report["bytes"] = json!(bytes.len());
     report["sha256"] = json!(crate::camera::hash(&bytes));
     report["format_exclusions"] = json!(exclusions);
+    report["clock_policy"] = json!(
+        "Independent observed-data linear fit; held-out past-day RMS <= 50 ns; past 14-day forecast RMS <= 50 ns and max <= 150 ns; existing source residual and freshness gates apply. Historical validation is not a future error guarantee."
+    );
+    report["clock_validation"] = json!(clock_reports);
+    report["health_training_start_gps"] = json!(data::calendar(health_start));
     let prns = archive.records.iter().map(|r| r.prn).collect::<Vec<_>>();
     report["available_prns_by_week"] = json!([prns, prns]);
     report["upload_allowed"] = json!(false);
@@ -516,6 +537,68 @@ pub fn cli(mut args: impl Iterator<Item = String>) -> Result<()> {
 mod tests {
     use super::*;
     const FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/tg6-state-vectors.bin");
+
+    #[test]
+    fn encoder_uses_validated_tg6_clocks_and_rejects_failed_error_checks() {
+        let temp = crate::test_support::Temp::new();
+        let eop = temp.path().join("eop.txt");
+        let mut lines = String::new();
+        for day in 61315..61360 {
+            let mut line = " ".repeat(80);
+            for (a, b, value) in [
+                (7, 15, format!("{day:8.2}")),
+                (18, 27, format!("{:9.6}", 0.1)),
+                (37, 46, format!("{:9.6}", 0.2)),
+                (58, 68, format!("{:10.7}", -0.035)),
+            ] {
+                line.replace_range(a..b, &value);
+            }
+            lines.push_str(&line);
+            lines.push('\n');
+        }
+        std::fs::write(&eop, lines).unwrap();
+        let cutoff = data::epoch("2026-10-14T00:00:00").unwrap();
+        let state = Archive::decode(FIXTURE).unwrap().records[0].states[0];
+        let clock = json!({"model":{
+            "degree":1,"coefficients":[1e-4 + 1e-12*10800.,1e-12,0.],
+            "samples":288,"training_rms_ns":1.,"largest_step_ns":1.,"past_day_validation_ns":[2.,1.],
+            "source":"rapid","training_start_gps_seconds":cutoff-3.*DAY,
+            "training_end_gps_seconds":cutoff-900.,"selection_reason":"Independent TG-6 linear fit"
+        },"validation":{"forecast_days":14,"forecast_start_gps_seconds":cutoff-14.*DAY,
+            "training_end_gps_seconds":cutoff-14.*DAY-900.,"observed_end_gps_seconds":cutoff-900.,
+            "samples":14*96,"rms_ns":10.,"max_absolute_ns":20.}});
+        let mut diagnostics = json!({"forecast_start_gps":data::calendar(cutoff),
+            "satellites":(1..=6).map(|prn| json!({"prn":prn,
+                "clock":{"degree":2,"coefficients":[1e-4,1e-12,1e-20]},
+                "tg6_clock":clock,"trajectory_2h_gcrs":vec![state.map(|v|v as f64);168].iter().map(|s|
+                    s.iter().enumerate().map(|(k,v)|v/if k<3 {10.} else {1000.}).collect::<Vec<_>>()).collect::<Vec<_>>()
+            })).collect::<Vec<_>>()});
+        let metrics = json!({"forecast_start_gps":data::calendar(cutoff),"forecast_days":14,
+            "training_start_gps":data::calendar(cutoff-3.*DAY),
+            "available_prns_by_week":[[1,2,3,4,5,6],[1,2,3,4,5,6]],
+            "earth_orientation_sha256":crate::camera::hash(&std::fs::read(&eop).unwrap())});
+        let (bytes, report) = generate(&diagnostics, &metrics, &eop).unwrap();
+        let decoded = Archive::decode(&bytes).unwrap();
+        assert_eq!(decoded.records.len(), 6);
+        assert_eq!(decoded.records[0].bias, 100_000_000);
+        assert_eq!(decoded.records[0].rate, 100_000_000);
+        assert_eq!(report["clock_validation"].as_array().unwrap().len(), 6);
+        diagnostics["satellites"][0]["tg6_clock"]["validation"]["max_absolute_ns"] = json!(151.);
+        diagnostics["satellites"][1]["tg6_clock"]["model"]["degree"] = json!(2);
+        let (bytes, report) = generate(&diagnostics, &metrics, &eop).unwrap();
+        assert_eq!(
+            Archive::decode(&bytes)
+                .unwrap()
+                .records
+                .iter()
+                .map(|r| r.prn)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5, 6]
+        );
+        assert_eq!(report["format_exclusions"].as_array().unwrap().len(), 2);
+        diagnostics["satellites"][2]["tg6_clock"] = Value::Null;
+        assert!(generate(&diagnostics, &metrics, &eop).is_err());
+    }
 
     #[test]
     fn independent_python_fixture_round_trips_with_correct_units() {

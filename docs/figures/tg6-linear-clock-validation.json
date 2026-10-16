@@ -1,0 +1,753 @@
+{
+  "evaluated_utc": "2026-10-16",
+  "forecast_start_gps": "2026-10-15T00:00:00",
+  "benchmark": "Frozen identical inputs; separate evaluation-day observations are excluded from every fit and acceptance decision.",
+  "old_candidate_satellites": 12,
+  "new_candidate_satellites": 19,
+  "tg1_bytes_unchanged": true,
+  "independent_encoder_bytes_identical": true,
+  "next_day_accuracy": {
+    "archive_sha256": "98e2acdbe1b0251217d736a0bcad68a646c109d442945d48b98ad160aa032602",
+    "orbit": {
+      "points": 228,
+      "unit": "m",
+      "rms": 0.33366999397380653,
+      "median_absolute": 0.2308231437349887,
+      "maximum_absolute": 1.3187647488694278
+    },
+    "clock": {
+      "points": 1824,
+      "unit": "ns",
+      "rms": 1.9965620799317927,
+      "median_absolute": 1.2144051620023968,
+      "maximum_absolute": 7.544153199986071
+    },
+    "by_prn": [
+      {
+        "prn": 2,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.23487046916638332,
+          "median_absolute": 0.2327884539119005,
+          "maximum_absolute": 0.3066384697617288
+        }
+      },
+      {
+        "prn": 4,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.26983700341875444,
+          "median_absolute": 0.23541237011874677,
+          "maximum_absolute": 0.39621599742783625
+        }
+      },
+      {
+        "prn": 5,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.09383828207829029,
+          "median_absolute": 0.08736125680427236,
+          "maximum_absolute": 0.16747465663827102
+        }
+      },
+      {
+        "prn": 7,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.20930626830027282,
+          "median_absolute": 0.18515010864205217,
+          "maximum_absolute": 0.347598839118574
+        }
+      },
+      {
+        "prn": 11,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.22437825440230963,
+          "median_absolute": 0.21881968319179596,
+          "maximum_absolute": 0.373810803189938
+        }
+      },
+      {
+        "prn": 12,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.40262927956940164,
+          "median_absolute": 0.39511738317976886,
+          "maximum_absolute": 0.5401424715477569
+        }
+      },
+      {
+        "prn": 13,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.5153920609891343,
+          "median_absolute": 0.4685107409614899,
+          "maximum_absolute": 0.8736970458034582
+        }
+      },
+      {
+        "prn": 14,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.8685325059345724,
+          "median_absolute": 0.726411215459299,
+          "maximum_absolute": 1.3187647488694278
+        }
+      },
+      {
+        "prn": 15,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.23195396182550818,
+          "median_absolute": 0.18506455863644322,
+          "maximum_absolute": 0.3604989890466991
+        }
+      },
+      {
+        "prn": 16,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.31770887029962086,
+          "median_absolute": 0.3032359200674672,
+          "maximum_absolute": 0.5657036879397793
+        }
+      },
+      {
+        "prn": 18,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.20643019370607232,
+          "median_absolute": 0.21987054542368806,
+          "maximum_absolute": 0.2934282014157704
+        }
+      },
+      {
+        "prn": 19,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.20618386056041957,
+          "median_absolute": 0.19065181688444494,
+          "maximum_absolute": 0.32542953312056194
+        }
+      },
+      {
+        "prn": 22,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.2170310928786311,
+          "median_absolute": 0.23120458590225762,
+          "maximum_absolute": 0.27822216182870435
+        }
+      },
+      {
+        "prn": 23,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.3675518160441334,
+          "median_absolute": 0.34315586356143907,
+          "maximum_absolute": 0.5633534364461826
+        }
+      },
+      {
+        "prn": 25,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.36237397696597234,
+          "median_absolute": 0.3654783339214499,
+          "maximum_absolute": 0.5120707386537814
+        }
+      },
+      {
+        "prn": 27,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.2171323536550755,
+          "median_absolute": 0.2138444019233754,
+          "maximum_absolute": 0.3390324725269827
+        }
+      },
+      {
+        "prn": 28,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.18555848751079693,
+          "median_absolute": 0.1650614504786907,
+          "maximum_absolute": 0.31744436879765414
+        }
+      },
+      {
+        "prn": 29,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.1592508293580712,
+          "median_absolute": 0.14460599755500575,
+          "maximum_absolute": 0.23864595500440997
+        }
+      },
+      {
+        "prn": 31,
+        "orbit": {
+          "points": 12,
+          "unit": "m",
+          "rms": 0.2050253054284705,
+          "median_absolute": 0.19016463242462905,
+          "maximum_absolute": 0.28970206629249406
+        }
+      }
+    ],
+    "earth_orientation_sha256": "bfa2066aab0400b075357f573af6081e0068a518993609eee0c5ca991bab0845",
+    "observations": [
+      {
+        "file": "igu24405_00.sp3.gz",
+        "sha256": "13203cbe5f4d88fe189b41ee32d655ba441727fca5c5ace71b6b4be403e5b409"
+      }
+    ],
+    "predicted_sp3_samples_used": false,
+    "limitation": "This verifies decoded physical quantities against independent observations, not receiver interpolation or hardware acceptance."
+  },
+  "independent_clock_checks": [
+    {
+      "prn": 2,
+      "tg1_degree": 2,
+      "independent_linear_agreement_ns": 3.908428394313056e-12,
+      "fortnight_rms_ns": 32.65792470976434,
+      "fortnight_max_ns": 66.7452577016159
+    },
+    {
+      "prn": 4,
+      "tg1_degree": 2,
+      "independent_linear_agreement_ns": 1.3560160805276448e-11,
+      "fortnight_rms_ns": 44.32358595479718,
+      "fortnight_max_ns": 94.53182635900956
+    },
+    {
+      "prn": 5,
+      "tg1_degree": 2,
+      "independent_linear_agreement_ns": 9.160379049171224e-14,
+      "fortnight_rms_ns": 12.620325897330622,
+      "fortnight_max_ns": 74.22343962433281
+    },
+    {
+      "prn": 7,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 2.931321295734792e-12,
+      "fortnight_rms_ns": 9.063650042057265,
+      "fortnight_max_ns": 16.28854875420716
+    },
+    {
+      "prn": 11,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 5.862642591469584e-12,
+      "fortnight_rms_ns": 24.363903973696445,
+      "fortnight_max_ns": 52.206061194805685
+    },
+    {
+      "prn": 12,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 2.44276774644566e-13,
+      "fortnight_rms_ns": 14.41715308074004,
+      "fortnight_max_ns": 21.782979674807994
+    },
+    {
+      "prn": 13,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 5.421010862427522e-11,
+      "fortnight_rms_ns": 24.388195944821927,
+      "fortnight_max_ns": 47.67336000521382
+    },
+    {
+      "prn": 14,
+      "tg1_degree": 2,
+      "independent_linear_agreement_ns": 3.66415161966849e-13,
+      "fortnight_rms_ns": 49.5274891549145,
+      "fortnight_max_ns": 106.3161344650029
+    },
+    {
+      "prn": 15,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 5.811853701858828e-11,
+      "fortnight_rms_ns": 11.124266365364594,
+      "fortnight_max_ns": 23.650621928819703
+    },
+    {
+      "prn": 16,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 7.816856788626112e-12,
+      "fortnight_rms_ns": 29.614279373364308,
+      "fortnight_max_ns": 63.414883269574155
+    },
+    {
+      "prn": 18,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 4.0784553692233306e-11,
+      "fortnight_rms_ns": 10.784523409280531,
+      "fortnight_max_ns": 24.779334190197815
+    },
+    {
+      "prn": 19,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 2.1374217781399524e-13,
+      "fortnight_rms_ns": 37.559591519369505,
+      "fortnight_max_ns": 78.23829733578404
+    },
+    {
+      "prn": 22,
+      "tg1_degree": 2,
+      "independent_linear_agreement_ns": 5.862642591469584e-12,
+      "fortnight_rms_ns": 30.597532042229705,
+      "fortnight_max_ns": 65.795253895661
+    },
+    {
+      "prn": 23,
+      "tg1_degree": 2,
+      "independent_linear_agreement_ns": 2.44276774644566e-12,
+      "fortnight_rms_ns": 29.429909481918386,
+      "fortnight_max_ns": 62.818318627487315
+    },
+    {
+      "prn": 25,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 1.465660647867396e-12,
+      "fortnight_rms_ns": 8.764760903563253,
+      "fortnight_max_ns": 12.158138335298037
+    },
+    {
+      "prn": 27,
+      "tg1_degree": 2,
+      "independent_linear_agreement_ns": 5.343554445349881e-14,
+      "fortnight_rms_ns": 4.625901570346712,
+      "fortnight_max_ns": 11.270180987327953
+    },
+    {
+      "prn": 28,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 5.421010862427522e-11,
+      "fortnight_rms_ns": 14.982353242566832,
+      "fortnight_max_ns": 32.61667548413094
+    },
+    {
+      "prn": 29,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 3.199058980502893e-11,
+      "fortnight_rms_ns": 24.7098105562433,
+      "fortnight_max_ns": 49.79786686278736
+    },
+    {
+      "prn": 31,
+      "tg1_degree": 1,
+      "independent_linear_agreement_ns": 1.954214197156528e-12,
+      "fortnight_rms_ns": 19.5506961061416,
+      "fortnight_max_ns": 38.69916739206126
+    }
+  ],
+  "latest_cached_forecast": {
+    "start_gps": "2026-10-16T00:00:00",
+    "previous_safe_prns": [
+      5,
+      13,
+      18,
+      19,
+      22,
+      23,
+      25,
+      27,
+      28
+    ],
+    "new_safe_prns": [
+      2,
+      4,
+      5,
+      7,
+      11,
+      13,
+      16,
+      18,
+      19,
+      22,
+      23,
+      25,
+      27,
+      28
+    ],
+    "source_health_age_note": "Offline publication uses an existing health snapshot; upload still requires live health within one hour."
+  },
+  "historical_source_files": [
+    {
+      "file": "igu24381_06.sp3.gz",
+      "sha256": "0e2cccbd59110678c078335f97f5bd3f2300508a3a3bf7544f7246a1a36530a7"
+    },
+    {
+      "file": "igu24381_12.sp3.gz",
+      "sha256": "1c876e3ba94fce477fe724835d13fa0af700ca6090320a4fec29949337c33a2b"
+    },
+    {
+      "file": "igu24381_18.sp3.gz",
+      "sha256": "7d167f677c6e7aff9ce71a1ed322b54a6f66e62917e73fa34d24f79b0426e3d2"
+    },
+    {
+      "file": "igu24382_00.sp3.gz",
+      "sha256": "e05c78cf4bfa1b4d04dc0ece4cc391b32d967626e1bb49e434ed62c69abedc7e"
+    },
+    {
+      "file": "igu24382_06.sp3.gz",
+      "sha256": "04032c31835ff7493b1f6fb0824d024a678ca2971fecb4ba9de99aaa066afe24"
+    },
+    {
+      "file": "igu24382_12.sp3.gz",
+      "sha256": "770181e948c48cc5d6c41093edcd4ee4228a731e92fa38c29aed9e36f39692de"
+    },
+    {
+      "file": "igu24382_18.sp3.gz",
+      "sha256": "2e9cd3828761cdce8043f60ecde387731334129db7a739e3865ab756c2266791"
+    },
+    {
+      "file": "igu24383_00.sp3.gz",
+      "sha256": "b8bf8d5d656bb4731421fd8f89e89d85df2340b7565edb94f8e864c5a1037d0b"
+    },
+    {
+      "file": "igu24383_06.sp3.gz",
+      "sha256": "d94e66c13967973351125b3e1900a9ae617d7e2de9e22ee51b6fd6c9f03560ec"
+    },
+    {
+      "file": "igu24383_12.sp3.gz",
+      "sha256": "6d264e4cebaccc980aa3933d258854923ba015731557523c3c651639f4108176"
+    },
+    {
+      "file": "igu24383_18.sp3.gz",
+      "sha256": "d8089b284948f44b34b25aee5ea51a928299122b057155ef12900eab1d3542f8"
+    },
+    {
+      "file": "igu24384_00.sp3.gz",
+      "sha256": "5eadebb98878c318a8cf2bc070a9845efa21f238b62e7b2cc64584fbbf8617b9"
+    },
+    {
+      "file": "igu24384_06.sp3.gz",
+      "sha256": "86775c8b4defb05aeaca1451b3509c5aa4ab3d5281bee12c9c9a6d45240ac49c"
+    },
+    {
+      "file": "igu24384_12.sp3.gz",
+      "sha256": "4c0f83746334c46f62485df9b8489420a4e848c0aa7f509484a5b4335e1e438f"
+    },
+    {
+      "file": "igu24384_18.sp3.gz",
+      "sha256": "6d712756d0f672f8a3835eb5b27455c5910e03a46d90d6edc3dfa5af7e6d33ae"
+    },
+    {
+      "file": "igu24385_00.sp3.gz",
+      "sha256": "331c355e0d7e570c65edb7f22e923c86a44b6d93c0ee30ffc4c022259d91b9c3"
+    },
+    {
+      "file": "igu24385_06.sp3.gz",
+      "sha256": "6a2ed76a4461720c6364d00b458b19cb6bce9871334c72bea5e194b82c4fbadf"
+    },
+    {
+      "file": "igu24385_12.sp3.gz",
+      "sha256": "4884908a81298ded744c8c07ddf1113fdaf41da946238b860f02f558897016ba"
+    },
+    {
+      "file": "igu24385_18.sp3.gz",
+      "sha256": "b0502787fa6cd5efd465492b5fd1a392860de36c2fccaf1f86acf44f290b24b1"
+    },
+    {
+      "file": "igu24386_00.sp3.gz",
+      "sha256": "65d87e7f0fc2e6625eda706b904e4f801a90bd11d324e16e860a2fe183ba1ad9"
+    },
+    {
+      "file": "igu24386_06.sp3.gz",
+      "sha256": "91a6b7b4e5e4490831d13b42578c4a3324075598167e1f812c351bb5dcc91b35"
+    },
+    {
+      "file": "igu24386_12.sp3.gz",
+      "sha256": "e7d7be892e1dda63a4435ca23dd73b92d0e5934d6b2e6f1e1a6695c7dc9b8593"
+    },
+    {
+      "file": "igu24386_18.sp3.gz",
+      "sha256": "ad868f99a149cc7730997701959a5bd57f22821fbea779f479073902c19f9a23"
+    },
+    {
+      "file": "igu24390_00.sp3.gz",
+      "sha256": "974dc7093f25c58b74af5babeed0ec9e5e893c1dd8811adbfa920ba7546788df"
+    },
+    {
+      "file": "igu24390_06.sp3.gz",
+      "sha256": "c1f4f60c0b37f5606c38f515cef8595f93ee78c97214f8b1a7e2fc5635fd33d4"
+    },
+    {
+      "file": "igu24390_12.sp3.gz",
+      "sha256": "89c852f169f4b7abebab6128791bec5819caf37282d76904b11e287d1b7e6c8c"
+    },
+    {
+      "file": "igu24390_18.sp3.gz",
+      "sha256": "696e8c46d5c7a5d483710896908ad52f75ea332cb412536de3b40c6f3141f377"
+    },
+    {
+      "file": "igu24391_00.sp3.gz",
+      "sha256": "f812929720f2b5d5636b252a828fdd4923cef09aa8ceaf92fbc6cdf2698dfde0"
+    },
+    {
+      "file": "igu24391_06.sp3.gz",
+      "sha256": "704aa7a2068b601bbd6bc2860266f1afe2621a8abe8686de78dcc46bb9b83094"
+    },
+    {
+      "file": "igu24391_12.sp3.gz",
+      "sha256": "477dc8cd7e13c14b1131365fc7759f38b4daa2bb9d92a0f5889363d9da6ed4f3"
+    },
+    {
+      "file": "igu24391_18.sp3.gz",
+      "sha256": "c475c983b17c35b3fa713c790163c0e358ee15fba6f0a7febc41a2d0bc943af5"
+    },
+    {
+      "file": "igu24392_00.sp3.gz",
+      "sha256": "7e77059319c268990d62fc9846037be69eaf79988fb92d7cf11204c2d354a342"
+    },
+    {
+      "file": "igu24392_06.sp3.gz",
+      "sha256": "d05c8b92f5aff4f0af3b0865166bc0aee1bdd57d866011e2433ffee864bf9501"
+    },
+    {
+      "file": "igu24392_12.sp3.gz",
+      "sha256": "05c401a3cfdfdc29e67abb12dab9573b5086d81a164e9482f5a5930c4b7d1459"
+    },
+    {
+      "file": "igu24392_18.sp3.gz",
+      "sha256": "3d7327c9620502c11e002d3d31452a30208f23582c21bbfb8833ea3854152c92"
+    },
+    {
+      "file": "igu24393_00.sp3.gz",
+      "sha256": "afb38205a822960e4ad41aed441885907432d8a5f25b71eb1350ab95fe9933ad"
+    },
+    {
+      "file": "igu24393_06.sp3.gz",
+      "sha256": "7a3c559a121489f9bdbb7fc185bfbd3dd295bad151582a6aa0953764825287d7"
+    },
+    {
+      "file": "igu24393_12.sp3.gz",
+      "sha256": "0e7e6836115b0d2088e48a899abbea470c5a8013bda085d01e6d85cb81e75e9d"
+    },
+    {
+      "file": "igu24393_18.sp3.gz",
+      "sha256": "15e3450dc3dba6eedb814a377c67675aa9d036961950aa26386330d0ee52f11c"
+    },
+    {
+      "file": "igu24394_00.sp3.gz",
+      "sha256": "ca6daee10cee6a29bc6f30831c018f35d446f07781e14a0d74ff5ba55b3c08c4"
+    },
+    {
+      "file": "igu24394_06.sp3.gz",
+      "sha256": "9ea192ae8f729448d719f82a7c03bda3ccd52ced7ae04ef6851f0285a9037be5"
+    },
+    {
+      "file": "igu24394_12.sp3.gz",
+      "sha256": "cee70a61d694d689c0049bbf79a73d78feca1b89f7dc5838c08167d01bd7c8a6"
+    },
+    {
+      "file": "igu24394_18.sp3.gz",
+      "sha256": "4010916227ec9cb208c8d27e978403353bebd0cd8e57ac7f6d45cc5b90221c00"
+    },
+    {
+      "file": "igu24395_00.sp3.gz",
+      "sha256": "7f1bc058b48c5bf42c94a6540a41facd3ac022ab9524775653e90e7841567464"
+    },
+    {
+      "file": "igu24395_06.sp3.gz",
+      "sha256": "fd2813241be8de06abe7f0a51fc1a0d637afba58a16726257a4cd077842b6198"
+    },
+    {
+      "file": "igu24395_12.sp3.gz",
+      "sha256": "80af85a588d9c3a69820258305f345b0aad8c09d57defaa5c12ded8445b6103d"
+    },
+    {
+      "file": "igu24395_18.sp3.gz",
+      "sha256": "a2fef31ac1d73d1b7d53106e0bcf4603b1fecc521aa9dd6d123940855bd4379c"
+    },
+    {
+      "file": "igu24396_00.sp3.gz",
+      "sha256": "4c8d3f699856fbf36a49965c0086877972bc81b847650d813b68105eafa2b7fd"
+    },
+    {
+      "file": "igu24396_06.sp3.gz",
+      "sha256": "a54519c1e48cc0e5d1d524f251a7da6689fbaf0a6a6980aa748ecd88a86111e6"
+    },
+    {
+      "file": "igu24396_12.sp3.gz",
+      "sha256": "dea40b5360237b90f98a1af266d0e9bf30717836c885d7fd282c68372687501e"
+    },
+    {
+      "file": "igu24396_18.sp3.gz",
+      "sha256": "6816f033798735fc8318536794d89de4b27afcc46bff7c0ee523285cd3495afa"
+    },
+    {
+      "file": "igu24400_00.sp3.gz",
+      "sha256": "047a86ee6223f20f8878649217dd22fe013719dfda50a13f06a4a5734175ec78"
+    },
+    {
+      "file": "igu24400_06.sp3.gz",
+      "sha256": "236ed349da57cd73e92737f3efbec597c33a2668390ec2797576817f14b26382"
+    },
+    {
+      "file": "igu24400_12.sp3.gz",
+      "sha256": "59940172e5c3e5c38a3e159b30b8ab3e4bcdc16e5e4d9d1c4aaf312a85631181"
+    },
+    {
+      "file": "igu24400_18.sp3.gz",
+      "sha256": "e571248094e9a2ea9d71a1bd3d9de86584f1687d122119cd09a2bfc758b14014"
+    },
+    {
+      "file": "igu24401_00.sp3.gz",
+      "sha256": "1b17ac7b119010992d385c4b8075b1834fdad324f2bccbe9455b91fa93f81dd0"
+    },
+    {
+      "file": "igu24401_06.sp3.gz",
+      "sha256": "37b3dc5d7ba1aa6a6056625950c79bd2e98414c1cc314f28519f117a2c685a6c"
+    },
+    {
+      "file": "igu24401_12.sp3.gz",
+      "sha256": "82cf3c7325b97b0a740a38ca5706e8aef8e39bec3027132b7538c5839a2f5d05"
+    },
+    {
+      "file": "igu24401_18.sp3.gz",
+      "sha256": "a2fef86bb29442b9c99660d13fd8863aef70fc783b81d6ff16d98f05d566501d"
+    },
+    {
+      "file": "igu24402_00.sp3.gz",
+      "sha256": "fb745a0948d0083c74752340a16d47087a2d923b3f1dd96ca072d859ad4c58f1"
+    },
+    {
+      "file": "igu24402_06.sp3.gz",
+      "sha256": "81240f2a9bde33ddd854d7c3f1c2e24bde145ddf6f4597d53f358d6b5c1eb04e"
+    },
+    {
+      "file": "igu24402_12.sp3.gz",
+      "sha256": "896eb0d0cf9420cf5d7e4b8abf8c33c99e6ccd7ee910f341846911798fa06e96"
+    },
+    {
+      "file": "igu24402_18.sp3.gz",
+      "sha256": "0b0d7463eb59c8cc0580820a4c98f962245d7542a88c9dfecc1842d72f2521c1"
+    },
+    {
+      "file": "igu24403_00.sp3.gz",
+      "sha256": "7eeb6e11645eaec5bc696ba4fb6ffa731a463e38ff2c5266546766129358a131"
+    },
+    {
+      "file": "igu24403_06.sp3.gz",
+      "sha256": "74faadf41e6eb7e6953122e65f1a02c84b0768b9e47edca0f7545cd9e8001d6b"
+    },
+    {
+      "file": "igu24403_12.sp3.gz",
+      "sha256": "917696a4eac0c80fa077481739951e630b3f6127a739f273148bb1a3632f206d"
+    },
+    {
+      "file": "igu24403_18.sp3.gz",
+      "sha256": "cd598378bb9769aab7b2418de87bb2439cae369d6511ca97466981552433aa37"
+    },
+    {
+      "file": "igu24404_00.sp3.gz",
+      "sha256": "1761944160613977ce522b2972913261f45cbb1a0cd9eddf946ab1f4dcfa547e"
+    },
+    {
+      "file": "igu24404_06.sp3.gz",
+      "sha256": "14138dff07b2269e9c1a21a652a308f10b859dd4bda91384a6be67225446ac97"
+    },
+    {
+      "file": "igu24404_12.sp3.gz",
+      "sha256": "cff72670953a8d06dcc376a3ba7f7d3c66a3bcb41d7cbfa13a3ac6f5e0acd161"
+    },
+    {
+      "file": "igu24404_18.sp3.gz",
+      "sha256": "6b00ca6c1cd7d3f20f066d06812b6f41982534c6c0e2b0edde22bfc97785fd1a"
+    },
+    {
+      "file": "IGS0OPSRAP_20262710000_01D_15M_ORB.SP3.gz",
+      "sha256": "ca993f8af1ec8308236a15808287a24c4dd7d58df933e35de0307d50164206e1"
+    },
+    {
+      "file": "IGS0OPSRAP_20262720000_01D_15M_ORB.SP3.gz",
+      "sha256": "eb30bc552dcfe7665f53d8cecf593d8cae14a3bf569688f6896ced58e702f871"
+    },
+    {
+      "file": "IGS0OPSRAP_20262730000_01D_15M_ORB.SP3.gz",
+      "sha256": "651453f3a3269e46ce57431ccf22e7b2242d09f00b8d266734f4409ea4e553fa"
+    },
+    {
+      "file": "IGS0OPSRAP_20262740000_01D_15M_ORB.SP3.gz",
+      "sha256": "40306ac09a1f211c3031d41871ddd671a86910a92f0a96fd6977264dcb2bca14"
+    },
+    {
+      "file": "IGS0OPSRAP_20262750000_01D_15M_ORB.SP3.gz",
+      "sha256": "3ba38ed6388518e4a48e41524d7f1fef5728a0254b570ed9ca9848fb2579d6af"
+    },
+    {
+      "file": "IGS0OPSRAP_20262760000_01D_15M_ORB.SP3.gz",
+      "sha256": "89f4ff3cc7e0713c47f29bbcbe3af5a1f079b51334ea725566c870fb2dbaa470"
+    },
+    {
+      "file": "IGS0OPSRAP_20262770000_01D_15M_ORB.SP3.gz",
+      "sha256": "ca064777f32d29e7eb9c5159792a99edeffa5d84542619d968b55bd0b8076192"
+    },
+    {
+      "file": "IGS0OPSRAP_20262780000_01D_15M_ORB.SP3.gz",
+      "sha256": "844d9846870b214768dd6d1be4f70236e6dc9ee8c97a22ca3da6502a3ae596b6"
+    },
+    {
+      "file": "IGS0OPSRAP_20262790000_01D_15M_ORB.SP3.gz",
+      "sha256": "0355045400c361fdd3c5498c6033c02d4e0d36a7a2eb873ff284a03ec63c9697"
+    },
+    {
+      "file": "IGS0OPSRAP_20262800000_01D_15M_ORB.SP3.gz",
+      "sha256": "09f0e081b187f3ce9f0f4796075bef6c4ae574afe5a5b3179ad97438fbf7e5bd"
+    },
+    {
+      "file": "IGS0OPSRAP_20262810000_01D_15M_ORB.SP3.gz",
+      "sha256": "11c51d405576a2a1055195c9df80263c361d61e42e298325f944addee61619cf"
+    },
+    {
+      "file": "IGS0OPSRAP_20262820000_01D_15M_ORB.SP3.gz",
+      "sha256": "f5a7a8af8887e56b7fbd8db244e2829643fdbebc3db036fa66e87245ce23169e"
+    },
+    {
+      "file": "IGS0OPSRAP_20262830000_01D_15M_ORB.SP3.gz",
+      "sha256": "68a56d1ec131063967c997fcdafbcefa0737106f6890ba1c10ed5b043d0849ba"
+    },
+    {
+      "file": "IGS0OPSRAP_20262840000_01D_15M_ORB.SP3.gz",
+      "sha256": "e9238e9d86dd55bd3acb903cdc5df6db0e9949aa1c789110412687ac65498d24"
+    },
+    {
+      "file": "IGS0OPSRAP_20262850000_01D_15M_ORB.SP3.gz",
+      "sha256": "2d17a4e5a31672bad14d03527cc45056942e0604f99dafdfadd5361564bf8388"
+    },
+    {
+      "file": "IGS0OPSRAP_20262860000_01D_15M_ORB.SP3.gz",
+      "sha256": "5d248a8e9b1b970a56d46db49d8c27f70eec2e3154045553c3ad090f189327d4"
+    },
+    {
+      "file": "IGS0OPSRAP_20262870000_01D_15M_ORB.SP3.gz",
+      "sha256": "11b63470d52c45b981bbf0e7f951c7b80a81ae5e563054962e004b8760aacb96"
+    }
+  ],
+  "limitations": [
+    "Historical 14-day validation is not a guarantee of future clock accuracy.",
+    "Retrospective use of observed products does not reconstruct their original publication times.",
+    "Scored orbit samples are exact stored knots; receiver interpolation and acquisition improvement remain unverified.",
+    "No camera upload was performed during this evaluation."
+  ]
+}

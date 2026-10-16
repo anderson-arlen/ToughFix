@@ -1,5 +1,133 @@
 # TG-6: recent assistance-data accuracy
 
+## Does past clock-prediction error predict the next forecast? (2026-10-16)
+
+**For a fourteen-day linear forecast, yes in this sample. For one to three
+days, almost all of the clocks rejected by that long-range test still meet
+the current error limits.** This measures clock prediction accuracy under
+our chosen limits, not the TG-6's acquisition requirements.
+
+The study uses 106 daily observed IGS Rapid products from July 1 through
+October 14, 2026, distributed by [NOAA](https://www.ngs.noaa.gov/CORS/data.shtml).
+The production TG-6 clock fitter reconstructs daily forecasts at 76 cutoffs
+from July 18 through October 1, across 32 GPS PRNs. At each cutoff:
+
+1. Fit three days ending fourteen days earlier; score its following fourteen
+   days to obtain the historical backtest result.
+2. Refit using the latest three days strictly before the cutoff.
+3. Freeze that new model and evaluate its TG-6-quantized offset/drift against
+   the following 1, 3, 7 and 14 days of observations.
+
+For example, at July 18 the old model trains on July 1–3 and predicts July
+4–17. The new model trains on July 15–17 and predicts July 18 onward. Its
+training epochs never include its future scoring period. The independent
+Python scorer reproduces every production gate decision for the current
+eligible models. Thresholds remain **50 ns RMS / 150 ns maximum**, fixed
+before collecting this dataset. Individual errors and common clock offsets
+are not removed.
+
+There were 2,432 attempted forecasts. Twenty-nine failed the existing recent
+fit checks. Of the remaining 2,403, 38 lacked an acceptable historical model
+and 48 lacked sufficient historical scoring observations. The primary table
+uses the same **2,296 complete paired cases** across every future horizon:
+
+| Following forecast period | Exceeded limits after a prior pass | Exceeded limits after a prior failure |
+| --- | ---: | ---: |
+| 1 day | 1 / 1,224 (**0.08%**) | 0 / 1,072 (**0%**) |
+| 3 days | 3 / 1,224 (**0.25%**) | 8 / 1,072 (**0.75%**) |
+| 7 days | 7 / 1,224 (**0.57%**) | 412 / 1,072 (**38.43%**) |
+| 14 days | 76 / 1,224 (**6.21%**) | 990 / 1,072 (**92.35%**) |
+
+![Earlier and subsequent clock errors, with failure rates by forecast horizon](figures/tg6-clock-persistence.png)
+
+Daily windows overlap and each satellite recurs, so these counts are not
+independent experiments. A sensitivity check uses cutoffs 31 days apart,
+making the complete observation windows disjoint. For fourteen-day forecasts,
+37 of 40 prior failures failed again (**92.5%**), compared with 2 of 47 prior
+passes (**4.3%**). July, August and September cutoff groups show the same
+direction. This is descriptive evidence over one season, not a calibrated
+probability for every future clock or operating regime.
+
+Across satellites, prior and following fourteen-day RMS errors have rank
+correlation **0.897**. After subtracting each satellite's average log error,
+the within-satellite correlation is approximately **−0.017**. This suggests
+that much of the signal reflects persistent differences between satellites.
+A recent above-average miss by one clock has little additional predictive
+value in this sample. These associations do not establish a physical cause.
+
+The practical implication is to distinguish long-range forecast suitability
+from immediate assistance usefulness. An earlier failure provides substantial
+evidence against promising fourteen days at the current precision. It provides
+little justification for withholding all short-term assistance. Shorter
+validity is a candidate for improving coverage; its receiver behaviour and
+effect on acquisition time still need testing.
+
+This is a retrospective reconstruction, not a collection of assistance files
+actually issued on those dates. The [IGS documents](https://igs.org/products/)
+the publication delay of Rapid products; this study does not reconstruct
+their historical arrival times. It evaluates only clock forecasts. It does
+not separately model orbit error, satellite-health exclusions, PRN reassignment,
+or receiver acquisition. Missing truth and unavailable histories are recorded
+separately, with additional results including unavailable histories in the
+full policy-rejection group.
+
+The [complete JSON results](figures/tg6-clock-persistence.json) include
+per-satellite, per-month and disjoint-window checks, input hashes, source-code
+hashes and exclusions. The [case CSV](figures/tg6-clock-persistence.csv),
+[plot PDF](figures/tg6-clock-persistence.pdf), frozen coefficients and cached
+source products make the calculation reviewable. The latter two are retained
+in the ignored local `research/clock-backtest/` archive.
+
+Reproduce the export and scoring with the public audit tools:
+
+```sh
+python3 scripts/fetch-clock-audit.py --start 2026-07-01 --end 2026-10-14 --output research/clock-backtest/data
+TOUGHFIX_CLOCK_AUDIT_DATA=research/clock-backtest/data TOUGHFIX_CLOCK_AUDIT_OUTPUT=research/clock-backtest/frozen-forecasts.json cargo test --locked predictor::clocks::audit_tests::export_historical_clock_forecasts -- --ignored --exact
+python3 scripts/score-clock-audit.py --data-dir research/clock-backtest/data --forecasts research/clock-backtest/frozen-forecasts.json --output docs/figures/tg6-clock-persistence
+```
+
+The optional Python scorer requires NumPy and Matplotlib; these are research
+dependencies and are not needed by the installed app. Its numerical, prediction
+flag and source-integrity checks run with `python3 -m unittest discover -s
+scripts -p test_clock_audit.py`.
+
+## Separate TG-6 linear-clock validation (2026-10-16)
+
+TG-6 clocks are now fitted independently as linear models. The TG-1 predictor
+continues selecting between linear and quadratic models. A separate causal
+14-day historical prediction test admits or excludes each TG-6 clock using
+observed error, with limits of 50 ns RMS and 150 ns maximum. These application
+heuristics assess past performance; they do not guarantee future accuracy.
+
+For a frozen **2026-10-15 00:00 GPS** forecast on identical cached inputs:
+
+| Check | Result |
+| --- | --- |
+| TG-6 satellites before health exclusions, old / new encoder | 12 / **19** |
+| Following day's observed clock error, new encoded file | **1.997 ns RMS**, 7.544 ns maximum |
+| Following day's orbit error at stored knots | **0.334 m RMS** |
+| TG-1 output | Byte-for-byte unchanged |
+| Separate Python TG-6 encoder | Byte-identical to Rust |
+
+All scored next-day observations were excluded from the fits and clock
+acceptance decisions. The clock check fitted three days ending October 1,
+then predicted October 1–14; it did not use October 15 observations. Independent
+NumPy linear fits and 14-day scores reproduce the native results. The reference
+for October 15 is the observed half of `igu24405_00.sp3.gz`; predicted samples
+are excluded. This is a retrospective calculation, not a reconstruction of
+product arrival times.
+
+The latest cached **2026-10-16 00:00 GPS** forecast has **14 health-cleared
+satellites**, compared with 9 under the previous encoder on those same inputs.
+That separate offline publication used an existing health snapshot; camera
+uploads still require a successful live health check within one hour.
+
+Input hashes, per-satellite validation errors and the full results are in
+[tg6-linear-clock-validation.json](figures/tg6-linear-clock-validation.json).
+No camera upload or acquisition-time measurement was performed for this change.
+
+## Earlier paired comparison (2026-10-14)
+
 Evaluated 2026-10-14 (local date). **ToughFix has lower measured errors than the
 current OM TG-6 file in this short, retrospective comparison.** This does not
 establish a winner over the complete two-week prediction period or measure

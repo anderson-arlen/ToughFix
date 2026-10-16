@@ -12,7 +12,9 @@ investigation archive. Those materials are not dependencies of the application.
 Public data downloaded by the app retain their source terms. NOAA distributes
 IGS orbit products from multiple analysis centers; government hosting does not
 make NOAA the sole producer. USNO supplies Earth orientation, NGA supplies EGM96,
-and NAVCEN supplies satellite notices. Source URLs, retrieval times, sizes, and
+and NAVCEN supplies satellite notices. CelesTrak's copies of NANUs and GPS
+operational advisories provide a fallback when NAVCEN is unavailable.
+Source URLs, retrieval times, sizes, and
 SHA-256 hashes are recorded in the app's data cache. The NGA archive is used only
 for coefficient text; its included executable programs are not run.
 
