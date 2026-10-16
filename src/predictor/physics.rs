@@ -354,6 +354,23 @@ pub fn fit(model: &Model, positions: &[V3], iterations: usize) -> Result<Fitted>
 mod tests {
     use super::*;
     #[test]
+    fn gravity_reads_named_deflated_egm96_coefficients() {
+        // Independently compressed with Python's zipfile, with another member
+        // before EGM96 and a degree-9 row after the coefficients we use.
+        let temp = crate::test_support::Temp::new();
+        let path = temp.path().join("egm96.zip");
+        std::fs::write(
+            &path,
+            include_bytes!("../../tests/fixtures/egm96-degree8.zip"),
+        )
+        .unwrap();
+        let gravity = Gravity::read(&path).unwrap();
+        assert!((gravity.coeff[2][0][0] + 0.0010826266835531513).abs() < 1e-16);
+        assert!((gravity.coeff[8][8][0] + 1.581885959105669e-13).abs() < 1e-25);
+        assert!((gravity.coeff[8][8][1] - 1.5365129480423921e-13).abs() < 1e-25);
+    }
+
+    #[test]
     fn dop853_time_dependent_force_matches_analytic_solution() {
         // y'=sin(t), y(0)=0: y=1-cos(t). This detects a wrong stage time,
         // which an autonomous circular-orbit test cannot detect.

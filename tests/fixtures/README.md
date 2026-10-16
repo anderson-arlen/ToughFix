@@ -15,6 +15,11 @@ the investigation archive, a camera, or network access.
   detection, event merging, and exclusion of future observations.
 - `orbit-discontinuity-eop.txt`: five USNO Earth-orientation rows needed for
   that test. Original source: `https://maia.usno.navy.mil/ser7/finals2000A.all`.
+- `egm96-degree8.zip`: public NGA EGM96 coefficient rows through degree 8,
+  plus the first degree-9 row, independently compressed with Python's `zipfile`.
+  A preceding text member checks selection by name. It verifies DEFLATE reading
+  and coefficient values across ZIP dependency upgrades. Original source:
+  `https://earth-info.nga.mil/php/download.php?file=egm-96spherical`.
 - `commit-framing.json`: a 12-byte command and 12-byte acknowledgement from
   the successful TG-1 transfer, with no device identity, serial, location, or
   assistance payload. Used to check PTP framing against a hardware example.
