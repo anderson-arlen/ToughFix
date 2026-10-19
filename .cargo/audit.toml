@@ -4,5 +4,18 @@
 # nalgebra 0.34 / ode_solvers 0.6 / levenberg-marquardt 0.15 stack requires
 # Simba 0.9, so retain the unmodified registry releases and Cargo.lock.
 # Revisit when these libraries support Simba 0.10, which removes paste.
-# This exception covers only this advisory; CI still denies other warnings.
-ignore = ["RUSTSEC-2024-0436"]
+# Each exception covers only the named advisory; CI still denies other warnings.
+ignore = [
+    "RUSTSEC-2024-0436",
+    # ksni 0.3.6 requires zbus 5, which uses zvariant, zvariant_derive and
+    # zbus_names. These informational maintenance notices mark their merger
+    # into zbus 6, not a reported vulnerability. No patched standalone versions
+    # exist. Remove these exceptions when a released ksni supports zbus 6.
+    # https://docs.rs/crate/ksni/0.3.6/source/Cargo.toml.orig
+    # https://rustsec.org/advisories/RUSTSEC-2026-0370.html
+    # https://rustsec.org/advisories/RUSTSEC-2026-0371.html
+    # https://rustsec.org/advisories/RUSTSEC-2026-0372.html
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
+]
