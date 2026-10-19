@@ -102,8 +102,9 @@ red; its bolt indicates USB connection, not a verified charging state. An SD
 card graphic shows capacity alongside a storage-use bar and free space.
 Snapshot age appears beside health and beneath the battery gauge. The camera
 refresh icon reads new battery, health and SD-card information on request,
-briefly unmounting and remounting the card. A busy card is left alone, and this
-refresh does not upload GPS predictions.
+briefly unmounting and remounting the card. Busy storage shows **Waiting to
+unmount**, a retry countdown, and **Try now**. Attempts repeat every 30 seconds
+until storage is available. This refresh does not upload GPS predictions.
 **Camera**, **Advanced**, and **Settings** are tabs in the same window, with preferences,
 observation ages, model statistics, hashes, upload history, and diagnostics.
 Native Libadwaita navigation appears in the header, moving to a bottom bar in
@@ -121,9 +122,11 @@ runs; ToughFix then mounts the card through UDisks2. Failed refreshes release
 the hold, and a 90-second initial wait limit releases it if downloads or prediction
 generation take too long. Startup disabled or an app failure also releases storage
 through service cleanup. This requires UDisks2. If an automounter ignores the
-hint, ToughFix requests one normal unmount at startup. A busy card cancels that
-connection's initial check; no forced unmount or periodic retry occurs. A card
-mounted again after preparation is also left alone until the next connection.
+hint, ToughFix requests a normal unmount at startup. Busy storage and automount
+races are retried every 30 seconds, with a countdown and **Try now**. Waiting
+for storage has no time limit and does not consume the initial update's
+90-second budget. The camera check and eligible GPS update continue once
+unmounting succeeds; the card is restored between attempts and after the update.
 
 Inputs refresh at startup and every 30 minutes while the app is running,
 before the one-hour satellite-health check expires. Download failures identify
@@ -142,11 +145,11 @@ subsequent refreshes leave mounted storage alone.
 
 **Update GPS now** checks the latest satellite inputs and updates the connected
 TG-1 regardless of the interval, useful before a trip. It briefly unmounts storage
-and restores it afterward; a busy card is left alone. If the camera already has
+and restores it afterward; busy storage is retried every 30 seconds. If the camera already has
 the latest file, no flash write is needed. The adjacent refresh icon updates only
 local satellite data and predictions. **Upload again** in Advanced explicitly
-rewrites the current file. An initial check skipped because storage mounted
-again is shown as neutral information, with the existing snapshot's age visible. No Python, virtual environment, or source checkout is needed
+rewrites the current file. Waiting for storage is shown as neutral information,
+with the existing snapshot's age visible. No Python, virtual environment, or source checkout is needed
 by the installed application.
 
 For custom paths, installation without system setup, or desktops with a different
@@ -462,7 +465,8 @@ from ordinary storage to the camera's telemetry mode, reads its status, and
 returns it to ordinary storage. This round trip has been verified on hardware
 and requires no camera-menu changes. It runs once on connection, or when the
 camera refresh button is pressed; there is no periodic status polling. A busy
-mounted filesystem is left alone. USB charging-state telemetry is not confirmed;
+mounted filesystem waits for a normal unmount, retried every 30 seconds.
+USB charging-state telemetry is not confirmed;
 the battery percentage is a timestamped reading, not a live charging meter.
 
 ## CEP file format

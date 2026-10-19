@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Instant};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Phase {
@@ -211,6 +211,7 @@ pub struct State {
     pub source_progress: Option<crate::predictor::Progress>,
     pub refresh_retry_seconds: Option<u64>,
     pub storage_preparing: bool,
+    pub storage_retry_at: Option<Instant>,
     pub storage_error: Option<String>,
     pub camera_note: Option<String>,
     pub automatic: bool,
@@ -238,6 +239,7 @@ impl State {
         self.device.is_some()
             && !self.phase.device_busy()
             && !self.storage_preparing
+            && self.storage_retry_at.is_none()
             && !self.reconnect_required
             && !self.multiple_cameras
             && !self.quit_pending
@@ -249,6 +251,7 @@ impl State {
             && !self.phase.device_busy()
             && !self.updating_sources
             && !self.manual_update_pending
+            && self.storage_retry_at.is_none()
             && !self.reconnect_required
             && !self.multiple_cameras
             && !self.quit_pending
@@ -334,6 +337,15 @@ impl State {
             if self.quit_pending {
                 activity.detail.push_str(" · will quit when finished");
             }
+        } else if let Some(retry_at) = self.storage_retry_at {
+            let seconds = retry_at
+                .saturating_duration_since(Instant::now())
+                .as_secs_f64()
+                .ceil() as u64;
+            activity.title = "Waiting to unmount".into();
+            activity.detail = format!(
+                "Storage is in use. Retrying in {seconds} seconds.\nThe queued operation will continue once storage is available."
+            );
         } else if self.updating_sources {
             activity.busy = true;
             if let Some(progress) = self.source_progress.as_ref() {
@@ -410,6 +422,8 @@ impl State {
     pub fn unplug_message(&self) -> &'static str {
         if self.phase.device_busy() {
             "Do not unplug the camera"
+        } else if self.storage_retry_at.is_some() {
+            "Waiting to unmount · camera operation queued"
         } else if self.storage_preparing {
             "Do not unplug · checking camera; storage will mount afterward"
         } else if self.reconnect_required {
@@ -511,6 +525,7 @@ pub enum Action {
     Quit,
     Refresh,
     RefreshCamera,
+    RetryUnmount,
     Upload,
     UpdateGps,
     SetAutomatic(bool),
@@ -916,6 +931,30 @@ mod tests {
         s.storage_preparing = false;
         assert!(!s.activity().busy);
     }
+    #[test]
+    fn unmount_countdown_stays_visible_during_background_work() {
+        let mut s = State {
+            device: Some(Device::default()),
+            storage_preparing: true,
+            storage_retry_at: Some(Instant::now() + std::time::Duration::from_secs(30)),
+            updating_sources: true,
+            ..Default::default()
+        };
+        let activity = s.activity();
+        assert_eq!(activity.title, "Waiting to unmount");
+        assert!(activity.detail.contains("30 seconds"));
+        assert!(!activity.warning);
+        assert!(!activity.busy);
+        assert!(activity.fraction.is_none());
+        assert!(!s.can_update_gps());
+        assert!(!s.can_refresh_camera());
+        assert!(s.unplug_message().contains("Waiting to unmount"));
+        s.storage_retry_at = Some(Instant::now() - std::time::Duration::from_secs(1));
+        assert!(s.activity().detail.contains("0 seconds"));
+        s.phase = Phase::Checking;
+        assert_eq!(s.activity().title, s.phase.label());
+    }
+
     #[test]
     fn camera_operations_take_priority_over_background_refresh_and_idle_has_no_progress() {
         let mut s = State {

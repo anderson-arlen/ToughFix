@@ -65,6 +65,7 @@ struct Fields {
     refresh: gtk::Button,
     update_gps: gtk::Button,
     camera_refresh: gtk::Button,
+    retry_unmount: gtk::Button,
     automatic: gtk::Switch,
     upload_interval: adw::SpinRow,
     tray_error: gtk::Label,
@@ -136,6 +137,9 @@ fn render(f: &Fields, s: &State, monitor_only: bool) {
             2
         });
     f.activity_detail.set_tooltip_text(Some(&activity.detail));
+    f.retry_unmount.set_visible(s.storage_retry_at.is_some());
+    f.retry_unmount
+        .set_sensitive(!s.phase.device_busy() && !s.quit_pending);
     f.spinner.set_spinning(activity.busy);
     f.spinner.set_visible(activity.busy);
     f.progress.set_visible(activity.busy);
@@ -452,7 +456,13 @@ fn render(f: &Fields, s: &State, monitor_only: bool) {
         "{}{}{}{}",
         s.message,
         issues,
-        if s.storage_mounted() { "\nCamera checks and GPS uploads are paused. Unmount camera storage while leaving USB connected to update GPS assistance." } else { "" },
+        if s.storage_retry_at.is_some() {
+            "\nThe camera operation will continue automatically when storage can be unmounted."
+        } else if s.storage_mounted() {
+            "\nUse Update GPS now to update assistance, or camera refresh to read a new snapshot."
+        } else {
+            ""
+        },
         if monitor_only {
             "\nMonitor mode · uploads and network refresh are disabled"
         } else {
@@ -467,6 +477,7 @@ fn render(f: &Fields, s: &State, monitor_only: bool) {
             && s.data.upload_allowed
             && !s.phase.device_busy()
             && !s.updating_sources
+            && s.storage_retry_at.is_none()
             && !s.reconnect_required
             && !s.quit_pending
             && !monitor_only,
@@ -551,7 +562,7 @@ pub fn run(
                 glib::Propagation::Proceed
             });
         }
-        for (name,action) in [("quit",Action::Quit),("refresh",Action::Refresh),("refresh-camera",Action::RefreshCamera),("update-gps",Action::UpdateGps),("upload",if demo{Action::DemoUpload}else{Action::Upload})] {
+        for (name,action) in [("quit",Action::Quit),("refresh",Action::Refresh),("refresh-camera",Action::RefreshCamera),("retry-unmount",Action::RetryUnmount),("update-gps",Action::UpdateGps),("upload",if demo{Action::DemoUpload}else{Action::Upload})] {
             let a=gtk::gio::SimpleAction::new(name,None);let shared=shared.clone();let tx=tx.clone();
             a.connect_activate(move|_,_|{if matches!(action,Action::Quit){quit(&shared,&tx)}else{let _=tx.send(action.clone());}});app.add_action(&a);
         }
@@ -577,6 +588,11 @@ pub fn run(
         activity_title.set_selectable(false);
         activity_row.append(&spinner);
         activity_row.append(&activity_title);
+        let retry_unmount = gtk::Button::with_label("Try now");
+        retry_unmount.set_valign(gtk::Align::Center);
+        retry_unmount.set_tooltip_text(Some("Try to unmount camera storage and continue the queued operation now"));
+        retry_unmount.set_visible(false);
+        activity_row.append(&retry_unmount);
         activity_card.append(&activity_row);
         let activity_detail = label("subtitle");
         activity_detail.set_lines(2);
@@ -642,7 +658,7 @@ pub fn run(
         health_caption.set_valign(gtk::Align::Center);
         snapshot_row.append(&health_caption);
         let camera_refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
-        camera_refresh.set_tooltip_text(Some("Refresh battery, health and SD card information. Briefly unmounts mounted camera storage; a busy card is left alone."));
+        camera_refresh.set_tooltip_text(Some("Refresh battery, health and SD card information. Briefly unmounts mounted camera storage; retries every 30 seconds while storage is busy."));
         camera_refresh.set_valign(gtk::Align::Center);
         snapshot_row.append(&camera_refresh);
         summary.append(&snapshot_row);
@@ -666,7 +682,7 @@ pub fn run(
         let gps_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let update_gps = gtk::Button::with_label("Update GPS now");
         update_gps.add_css_class("suggested-action");
-        update_gps.set_tooltip_text(Some("Fetch the latest satellite data and update this camera, ignoring the automatic interval. Briefly unmounts storage; a busy card is left alone. Identical assistance data is not rewritten."));
+        update_gps.set_tooltip_text(Some("Fetch the latest satellite data and update this camera, ignoring the automatic interval. Briefly unmounts storage; retries every 30 seconds while storage is busy. Identical assistance data is not rewritten."));
         let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
         refresh.set_tooltip_text(Some("Refresh satellite data and predictions without updating the camera"));
         gps_actions.append(&update_gps);
@@ -774,6 +790,19 @@ pub fn run(
         root.append(&status_area);
         root.append(&stack);
         if demo {
+            let action = gtk::gio::SimpleAction::new("demo-storage-busy", None);
+            let busy_shared = shared.clone();
+            action.connect_activate(move |_, _| {
+                let mut s = busy_shared.lock().unwrap();
+                s.phase = crate::model::Phase::Idle;
+                s.storage_preparing = false;
+                s.storage_error = None;
+                s.storage_retry_at = Some(Instant::now() + Duration::from_secs(30));
+                if let Some(device) = s.device.as_mut() {
+                    device.mounts = vec!["/media/demo-camera".into()];
+                }
+            });
+            app.add_action(&action);
             let action = gtk::gio::SimpleAction::new("demo-auto-mounted",None);
             let mounted_shared = shared.clone();
             action.connect_activate(move |_,_| {
@@ -926,12 +955,13 @@ pub fn run(
                 app.add_action(&action);
             }
         }
-        let fields = Rc::new(Fields { connection, camera, storage, observed, fitted, clocks, source, source_link, health, training, validity, satellites, quality, hash, commit, match_status, commit_hash, banner, progress, message, upload, refresh, update_gps, camera_refresh, automatic, upload_interval, tray_error, activity_title, activity_detail, spinner, activity_card, camera_image, camera_tg6_image, camera_8010_image, camera_name: name, gps_card, gps_details, health_badge, health_caption, resources: vec![resources_main,resources_details], assistance_summary, last_update_summary });
+        let fields = Rc::new(Fields { connection, camera, storage, observed, fitted, clocks, source, source_link, health, training, validity, satellites, quality, hash, commit, match_status, commit_hash, banner, progress, message, upload, refresh, update_gps, camera_refresh, retry_unmount, automatic, upload_interval, tray_error, activity_title, activity_detail, spinner, activity_card, camera_image, camera_tg6_image, camera_8010_image, camera_name: name, gps_card, gps_details, health_badge, health_caption, resources: vec![resources_main,resources_details], assistance_summary, last_update_summary });
         let initial_state = shared.lock().unwrap().clone();
         render(&fields, &initial_state, monitor_only);
         {let tx=tx.clone();fields.refresh.connect_clicked(move |_|{let _=tx.send(Action::Refresh);});}
         {let tx=tx.clone();fields.update_gps.connect_clicked(move |_|{let _=tx.send(Action::UpdateGps);});}
         {let tx=tx.clone();fields.camera_refresh.connect_clicked(move |_|{let _=tx.send(Action::RefreshCamera);});}
+        {let tx=tx.clone();fields.retry_unmount.connect_clicked(move |_|{let _=tx.send(Action::RetryUnmount);});}
         {let tx=tx.clone();fields.upload.connect_clicked(move |_|{let _=tx.send(if demo{Action::DemoUpload}else{Action::Upload});});}
         {let shared=shared.clone();let tx=tx.clone();fields.automatic.connect_active_notify(move|switch|{
             if shared.lock().unwrap().automatic!=switch.is_active(){let _=tx.send(Action::SetAutomatic(switch.is_active()));}

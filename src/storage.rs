@@ -165,8 +165,8 @@ fn unmount_volumes(device: &Device, client: &mut impl MountClient) -> Result<()>
     Ok(())
 }
 
-/// Called at most once per USB attachment. A busy card or an automount race
-/// cancels the initial check; the transport independently rechecks mount state.
+/// The desktop retries busy filesystems and automount races before opening a
+/// vendor session; the transport independently rechecks mount state.
 #[derive(Debug)]
 struct StorageRemounted;
 impl std::fmt::Display for StorageRemounted {
@@ -177,6 +177,16 @@ impl std::fmt::Display for StorageRemounted {
 impl std::error::Error for StorageRemounted {}
 pub fn mounted_again(error: &anyhow::Error) -> bool {
     error.is::<StorageRemounted>()
+}
+pub fn retryable(error: &anyhow::Error) -> bool {
+    mounted_again(error)
+        || camera::storage_in_use(error)
+        || error.chain().any(|cause| {
+            cause.downcast_ref::<glib::Error>().is_some_and(|e| {
+                gio::DBusError::remote_error(e).as_deref()
+                    == Some("org.freedesktop.UDisks2.Error.DeviceBusy")
+            })
+        })
 }
 pub fn prepare(device: &Device) -> Result<Device> {
     let attachment = camera::connection_identity(device).context("Camera disconnected")?;
@@ -276,6 +286,25 @@ pub fn fallback() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_busy_storage_and_mount_races_are_retryable() {
+        let busy = anyhow::Error::from(gio::DBusError::new_for_dbus_error(
+            "org.freedesktop.UDisks2.Error.DeviceBusy",
+            "Error unmounting /dev/sdb1: target is busy",
+        ))
+        .context("Unmounting camera storage");
+        assert!(retryable(&busy));
+        assert!(retryable(&StorageRemounted.into()));
+        for name in [
+            "org.freedesktop.UDisks2.Error.NotAuthorized",
+            "org.freedesktop.UDisks2.Error.Failed",
+        ] {
+            let error = gio::DBusError::new_for_dbus_error(name, "Cannot unmount");
+            assert!(!retryable(&error.into()));
+        }
+        assert!(!retryable(&anyhow::anyhow!("Camera disconnected")));
+    }
+
     #[derive(Default)]
     struct Fake {
         calls: Vec<PathBuf>,

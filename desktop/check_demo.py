@@ -171,6 +171,15 @@ def main():
             assert 'eject storage' in tray_menu()
             print('PASS: preparation completion, storage errors and mounts update the tray while upload phase stays idle')
 
+            action('demo-storage-busy')
+            until(lambda: 'Waiting to unmount' in tray_property('Title'))
+            assert not busy(), 'Waiting for storage must not claim a camera transaction is active'
+            action('retry-unmount')
+            until(busy)
+            until(lambda: not busy())
+            assert 'Waiting to unmount' not in tray_property('Title')
+            print('PASS: busy storage waits without an error and Try now continues the queued update')
+
             action('demo-camera-old')
             action('refresh-camera')
             until(busy)

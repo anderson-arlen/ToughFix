@@ -28,7 +28,9 @@ the GPS assistance section refreshes inputs and updates the camera; its adjacent
 refresh icon updates only local observations and predictions. **Advanced**
 retains the explicit rewrite control. The refresh icon beside the snapshot age reads a new
 battery, health and SD-card snapshot without uploading GPS data. It briefly
-unmounts and remounts the card; a busy card is left alone. Snapshot age appears
+unmounts and remounts the card. Busy storage shows **Waiting to unmount**, a
+countdown to the next attempt, and **Try now**. Attempts repeat every 30 seconds
+until storage is available, then the queued operation continues. Snapshot age appears
 beside health and beneath the battery gauge, and advances while the window is open.
 Navigation uses Libadwaita's native icon-and-label view switcher in the header,
 with a bottom navigation bar below 520 logical pixels. Native controls keep
@@ -210,10 +212,13 @@ model-specific udev rules set [UDISKS_AUTO](https://storaged.org/udisks/docs/udi
 to hold desktop automount while this initial update runs. Once it finishes,
 ToughFix mounts the card through UDisks2, ready for browsing. If storage has
 already mounted, ToughFix requests one normal unmount during this initial
-check, including a health and battery reading. A busy card cancels the check;
-partitions already unmounted are restored. No forced unmount occurs. Mounts
-that appear after this preparation cancel further automatic camera access.
-After the initial check, browsing storage is never interrupted automatically.
+check, including a health and battery reading. A busy card or an automount race
+queues another normal unmount every 30 seconds; **Waiting to unmount** shows the
+remaining seconds and **Try now** requests an immediate attempt. Partitions
+already unmounted are restored between attempts. Waiting for storage has no
+time limit and does not consume the initial GPS update's 90-second budget.
+Once storage is available, the check and eligible GPS update continue.
+After the initial operation finishes, browsing storage is never interrupted automatically.
 Camera identity, battery and SD card checks run before GPS-specific commands;
 a failed storage check prevents the GPS update.
 The app permits one automatic upload per USB attachment; later prediction
@@ -248,8 +253,9 @@ hash-verified local archive when available; uncertain health history never
 postpones a necessary update.
 
 **Update GPS now** fetches current inputs before uploading, ignores the interval,
-and skips identical data. It performs one normal unmount and restores the card
-on success or failure; it never forces a busy filesystem. A queued update is
+and skips identical data. It requests a normal unmount, retrying busy storage
+every 30 seconds with a countdown and **Try now**, and restores the card after
+each attempt. A queued update is
 cancelled if the camera changes or disconnects. Advanced retains **Upload again**
 for an explicit rewrite.
 

@@ -44,7 +44,7 @@ fn refresh_on_connection(device: Option<&Device>, data: &DataInfo) -> bool {
 }
 
 /// Vendor sessions can interrupt USB storage. Permit one automatic update per
-/// USB attachment (including its status query), with one initial normal unmount.
+/// USB attachment (including its status query). Busy storage waits for a retry.
 #[derive(Default)]
 struct CameraActivity {
     connection: String,
@@ -54,6 +54,7 @@ struct CameraActivity {
     connected_at: Option<Instant>,
     storage_released: bool,
     preparation_attempted: bool,
+    waiting_for_storage: bool,
 }
 impl CameraActivity {
     fn observe(&mut self, connection: &str, storage_available: bool, now: Instant) {
@@ -71,17 +72,19 @@ impl CameraActivity {
         }
     }
     fn can_access(&self, now: Instant) -> bool {
-        self.unmounted_since.is_some_and(|at| {
-            // UDisks Unmount returns after the filesystem is unmounted. Open
-            // the guarded transport immediately, rather than leaving another
-            // automount race window after an explicit preparation.
-            self.preparation_attempted || now.duration_since(at) >= Duration::from_secs(3)
-        })
+        !self.waiting_for_storage
+            && self.unmounted_since.is_some_and(|at| {
+                // UDisks Unmount returns after the filesystem is unmounted. Open
+                // the guarded transport immediately, rather than leaving another
+                // automount race window after an explicit preparation.
+                self.preparation_attempted || now.duration_since(at) >= Duration::from_secs(3)
+            })
     }
     fn take_initial_preparation(&mut self, now: Instant) -> bool {
         if self.connection.is_empty()
             || self.storage_released
             || self.preparation_attempted
+            || self.waiting_for_storage
             || self.initial_expired(now)
             || self
                 .connected_at
@@ -89,7 +92,7 @@ impl CameraActivity {
         {
             return false;
         }
-        // Consume the allowance before doing I/O, including a failed unmount.
+        // Busy storage restores this allowance without starting a vendor session.
         self.preparation_attempted = true;
         true
     }
@@ -111,8 +114,22 @@ impl CameraActivity {
             && self.can_access(now)
     }
     fn initial_expired(&self, now: Instant) -> bool {
-        self.connected_at
-            .is_some_and(|at| now.duration_since(at) >= Duration::from_secs(90))
+        !self.waiting_for_storage
+            && self
+                .connected_at
+                .is_some_and(|at| now.duration_since(at) >= Duration::from_secs(90))
+    }
+    fn wait_for_storage(&mut self) {
+        self.waiting_for_storage = true;
+        self.preparation_attempted = false;
+        self.probe_attempted = false;
+        self.automatic_attempted = false;
+        self.unmounted_since = None;
+    }
+    fn retry_storage(&mut self, now: Instant) {
+        self.waiting_for_storage = false;
+        // Time spent waiting for a busy filesystem does not use the GPS budget.
+        self.connected_at = Some(now - Duration::from_secs(3));
     }
     fn should_release(&self, now: Instant, state: &State) -> bool {
         self.automatic_attempted
@@ -394,27 +411,20 @@ fn accept_camera_info(config: &Config, shared: &Shared, device: &Device, info: C
     s.camera_error = None;
     s.camera_note = None;
 }
-fn note_automatic_mount(shared: &Shared) {
-    let mut s = shared.lock().unwrap();
-    s.storage_error = None;
-    s.camera_note =
-        Some("Storage is ready for browsing · use camera refresh for a current snapshot".into());
-    s.message = "Initial camera check skipped because storage mounted automatically".into();
-}
-
 /// An explicit read-only refresh does not touch the automatic connection budget
 /// or prediction files. Always restore storage, even after a partial unmount.
+/// Returns true when busy storage needs another attempt.
 fn refresh_camera_with(
     config: &Config,
     shared: &Shared,
     prepare: impl FnOnce(&Device) -> Result<Device>,
     probe: impl FnOnce(&Device) -> Result<CameraInfo>,
     restore: impl FnOnce(&Device) -> Result<()>,
-) {
+) -> bool {
     let device = {
         let mut s = shared.lock().unwrap();
         if !s.can_refresh_camera() {
-            return;
+            return false;
         }
         s.phase = Phase::ReadingCamera;
         s.storage_error = None;
@@ -432,10 +442,13 @@ fn refresh_camera_with(
     });
     set_phase(shared, Phase::RestoringStorage);
     let restored = restore(&device);
+    let waiting = result.as_ref().err().is_some_and(storage::retryable) && restored.is_ok();
     let mut s = shared.lock().unwrap();
     s.phase = Phase::Idle;
     s.message = "Camera information refreshed".into();
-    if let Err(e) = result {
+    if let Err(e) = result
+        && !waiting
+    {
         s.phase = Phase::Failed;
         s.message = format!("Camera refresh failed: {e:#}");
         if probe_failed && !camera::storage_in_use(&e) {
@@ -459,6 +472,7 @@ fn refresh_camera_with(
             }),
         );
     }
+    waiting
 }
 
 fn record(config: &Config, receipt: &Receipt) -> Result<()> {
@@ -645,16 +659,17 @@ fn release_before_quit(shared: &Shared, activity: &mut CameraActivity, device: O
         release_storage(shared, device);
     }
 }
-/// Explicit updates may interrupt mounted storage once. Restore every volume
-/// even when preparation stops after unmounting only part of the card.
+/// Restore every volume even when preparation stops partway through the card.
+/// Returns true when busy storage needs another attempt.
 fn manual_upload_with(
     shared: &Shared,
     device: &Device,
     prepare: impl FnOnce(&Device) -> Result<Device>,
     transfer: impl FnOnce(&Device) -> Result<()>,
     restore: impl FnOnce(&Device) -> Result<()>,
-) {
+) -> bool {
     set_phase(shared, Phase::Checking);
+    shared.lock().unwrap().storage_error = None;
     let mut started = false;
     let result = prepare(device).and_then(|prepared| {
         started = true;
@@ -663,10 +678,13 @@ fn manual_upload_with(
     let phase = shared.lock().unwrap().phase.clone();
     set_phase(shared, Phase::RestoringStorage);
     let restored = restore(device);
+    let waiting = result.as_ref().err().is_some_and(storage::retryable) && restored.is_ok();
     let mut s = shared.lock().unwrap();
     s.phase = Phase::Idle;
     s.storage_preparing = false;
-    if let Err(e) = result {
+    if let Err(e) = result
+        && !waiting
+    {
         s.message = format!("GPS update failed: {e:#}");
         if started && !camera::storage_in_use(&e) {
             s.phase = Phase::Failed;
@@ -681,12 +699,56 @@ fn manual_upload_with(
         s.message.push_str(&format!("\n{error}"));
         s.storage_error = Some(error);
     }
+    waiting
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum UploadKind {
     Automatic,
     Latest,
     Again,
+}
+
+const STORAGE_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum StorageOperation {
+    Initial,
+    RefreshCamera,
+    Upload(UploadKind),
+}
+
+struct StorageRetry {
+    connection: String,
+    operation: StorageOperation,
+    at: Instant,
+}
+impl StorageRetry {
+    fn new(connection: &str, operation: StorageOperation, now: Instant) -> Self {
+        Self {
+            connection: connection.into(),
+            operation,
+            at: now + STORAGE_RETRY_INTERVAL,
+        }
+    }
+    fn due(&self, connection: &str, now: Instant) -> bool {
+        self.connection == connection && now >= self.at
+    }
+}
+
+fn queue_storage_retry(
+    pending: &mut Option<StorageRetry>,
+    shared: &Shared,
+    connection: &str,
+    operation: StorageOperation,
+) {
+    let retry = StorageRetry::new(connection, operation, Instant::now());
+    let mut s = shared.lock().unwrap();
+    s.phase = Phase::Idle;
+    s.storage_error = None;
+    s.storage_retry_at = Some(retry.at);
+    s.message =
+        "Waiting to unmount camera storage; the queued operation will retry automatically".into();
+    *pending = Some(retry);
 }
 impl UploadKind {
     fn should_transfer(self, state: &State) -> bool {
@@ -813,6 +875,7 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
         let mut camera_refresh_requested = false;
         let mut manual_refresh_key = None;
         let mut manual_upload_key = None;
+        let mut storage_retry: Option<StorageRetry> = None;
         let (refresh_tx, refresh_rx) = mpsc::channel();
         let mut refreshing = false;
         let mut refresh_interval = Duration::from_secs(3600);
@@ -870,6 +933,17 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 }
                 Ok(Action::RefreshCamera) if config.demo => demo_refresh_camera(&shared),
                 Ok(Action::RefreshCamera) => camera_refresh_requested = true,
+                Ok(Action::RetryUnmount) if config.demo => {
+                    if shared.lock().unwrap().storage_retry_at.take().is_some() {
+                        demo_upload(&shared);
+                    }
+                }
+                Ok(Action::RetryUnmount) => {
+                    if let Some(retry) = storage_retry.as_mut() {
+                        retry.at = Instant::now();
+                        shared.lock().unwrap().storage_retry_at = Some(retry.at);
+                    }
+                }
                 Ok(Action::SetAutomatic(enabled)) => {
                     let hours = shared.lock().unwrap().upload_interval_hours();
                     match save_upload_settings(&config, enabled, hours) {
@@ -910,6 +984,15 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 return;
             }
             if config.demo {
+                let due = shared
+                    .lock()
+                    .unwrap()
+                    .storage_retry_at
+                    .is_some_and(|at| Instant::now() >= at);
+                if due {
+                    shared.lock().unwrap().storage_retry_at = None;
+                    demo_upload(&shared);
+                }
                 continue;
             }
             if let Ok(result) = refresh_rx.try_recv() {
@@ -932,7 +1015,7 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                     manual_already_latest =
                         result.is_ok() && s.data.upload_allowed && s.matches_latest();
                     if result.is_ok() && s.data.upload_allowed && !manual_already_latest {
-                        manual_upload_key = Some(key);
+                        manual_upload_key = Some((key, UploadKind::Latest));
                     } else {
                         s.manual_update_pending = false;
                     }
@@ -988,6 +1071,11 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                     s.camera = None;
                     s.camera_cached = false;
                     s.storage_error = None;
+                    s.storage_retry_at = None;
+                    storage_retry = None;
+                    manual_refresh_key = None;
+                    manual_upload_key = None;
+                    s.manual_update_pending = false;
                     s.camera_note = None;
                     if let Some(key) = device.as_ref().and_then(|d| d.serial_key.as_ref()) {
                         let receipts: Vec<Receipt> =
@@ -1041,10 +1129,20 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
             );
             {
                 let mut s = shared.lock().unwrap();
+                if storage_retry.is_some() && (s.reconnect_required || s.multiple_cameras) {
+                    storage_retry = None;
+                    s.storage_retry_at = None;
+                    s.manual_update_pending = false;
+                    camera_activity.waiting_for_storage = false;
+                    camera_activity.automatic_attempted = true;
+                }
+            }
+            {
+                let mut s = shared.lock().unwrap();
                 s.storage_preparing =
                     !camera_activity.storage_released && !last_connection.is_empty();
             }
-            let initial_allowed = {
+            let mut initial_allowed = {
                 let s = shared.lock().unwrap();
                 !s.reconnect_required
                     && !s.multiple_cameras
@@ -1055,6 +1153,26 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                             && !refresh_requested
                             && refresh_at.elapsed() < refresh_interval))
             };
+            if storage_retry.as_ref().is_some_and(|retry| {
+                let s = shared.lock().unwrap();
+                device.is_some()
+                    && retry.due(&last_connection, Instant::now())
+                    && !s.reconnect_required
+                    && !s.multiple_cameras
+            }) {
+                let retry = storage_retry.take().unwrap();
+                shared.lock().unwrap().storage_retry_at = None;
+                match retry.operation {
+                    StorageOperation::Initial => {
+                        camera_activity.retry_storage(Instant::now());
+                        initial_allowed = true;
+                    }
+                    StorageOperation::RefreshCamera => camera_refresh_requested = true,
+                    StorageOperation::Upload(kind) => {
+                        manual_upload_key = Some((retry.connection, kind));
+                    }
+                }
+            }
             if initial_allowed
                 && let Some(current) = device.as_ref()
                 && camera_activity.take_initial_preparation(Instant::now())
@@ -1071,18 +1189,22 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                     }
                     Err(e) => {
                         eprintln!("ToughFix: initial storage preparation failed: {e:#}");
-                        // Restore any partitions already unmounted, and never
-                        // retry this connection while the user is browsing.
-                        camera_activity.storage_released = true;
-                        camera_activity.automatic_attempted = true;
-                        camera_activity.probe_attempted = true;
+                        // Restore partially unmounted cards between attempts.
                         release_storage(&shared, current);
-                        if storage::mounted_again(&e) {
-                            note_automatic_mount(&shared);
+                        if storage::retryable(&e) {
+                            camera_activity.wait_for_storage();
+                            queue_storage_retry(
+                                &mut storage_retry,
+                                &shared,
+                                &last_connection,
+                                StorageOperation::Initial,
+                            );
                         } else {
-                            shared.lock().unwrap().storage_error = Some(format!(
-                                "Initial camera check skipped: {e:#}. Storage will be left alone until the next connection."
-                            ));
+                            camera_activity.storage_released = true;
+                            camera_activity.automatic_attempted = true;
+                            camera_activity.probe_attempted = true;
+                            shared.lock().unwrap().storage_error =
+                                Some(format!("Initial camera check failed: {e:#}"));
                         }
                     }
                 }
@@ -1091,14 +1213,13 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 && !camera_activity.storage_released
                 && device.as_ref().is_some_and(|d| !d.mounts.is_empty())
             {
-                // Storage mounted again after the one preparation attempt.
-                // Never take it away a second time on this USB attachment.
-                camera_activity.storage_released = true;
-                camera_activity.automatic_attempted = true;
-                camera_activity.probe_attempted = true;
-                let message = "Storage mounted again before camera access; initial check skipped. Storage will be left alone until the next connection.";
-                eprintln!("ToughFix: {message}");
-                note_automatic_mount(&shared);
+                camera_activity.wait_for_storage();
+                queue_storage_retry(
+                    &mut storage_retry,
+                    &shared,
+                    &last_connection,
+                    StorageOperation::Initial,
+                );
             }
             {
                 let mut s = shared.lock().unwrap();
@@ -1109,13 +1230,21 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 checked_8010 = device.as_ref().is_some_and(|d| !d.model.supports_gps())
                     && shared.lock().unwrap().can_refresh_camera();
                 camera_refresh_requested = false;
-                refresh_camera_with(
+                let waiting = refresh_camera_with(
                     &config,
                     &shared,
                     storage::prepare,
                     camera::probe,
                     storage::release,
                 );
+                if waiting {
+                    queue_storage_retry(
+                        &mut storage_retry,
+                        &shared,
+                        &last_connection,
+                        StorageOperation::RefreshCamera,
+                    );
+                }
                 last_scan = Instant::now() - Duration::from_secs(3);
             }
             if let Some(device) = device.as_ref() {
@@ -1157,7 +1286,15 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                                 // Automount won the race; no camera command ran.
                                 camera_activity.probe_attempted = false;
                                 s.camera_error = None;
-                                s.message = e.to_string();
+                                drop(s);
+                                release_storage(&shared, device);
+                                camera_activity.wait_for_storage();
+                                queue_storage_retry(
+                                    &mut storage_retry,
+                                    &shared,
+                                    &last_connection,
+                                    StorageOperation::Initial,
+                                );
                             } else {
                                 s.camera_error = Some(format!("{e:#}"));
                                 if camera::requires_reconnect(&e) {
@@ -1239,7 +1376,11 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 shared.lock().unwrap().stopped = true;
                 return;
             }
-            if let Some(key) = manual_upload_key.take() {
+            if upload_requested && !config.monitor_only && storage_retry.is_none() {
+                upload_requested = false;
+                manual_upload_key = Some((last_connection.clone(), UploadKind::Again));
+            }
+            if let Some((key, kind)) = manual_upload_key.take() {
                 let current = {
                     let s = shared.lock().unwrap();
                     (!s.reconnect_required
@@ -1254,13 +1395,21 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 if let Some(current) =
                     current.filter(|d| camera::connection_identity(d).as_ref() == Some(&key))
                 {
-                    manual_upload_with(
+                    let waiting = manual_upload_with(
                         &shared,
                         &current,
                         storage::prepare,
-                        |prepared| upload(&config, &shared, prepared, UploadKind::Latest),
+                        |prepared| upload(&config, &shared, prepared, kind),
                         storage::release,
                     );
+                    if waiting {
+                        queue_storage_retry(
+                            &mut storage_retry,
+                            &shared,
+                            &last_connection,
+                            StorageOperation::Upload(kind),
+                        );
+                    }
                     camera_activity.storage_released = true;
                     camera_activity.automatic_attempted = true;
                     camera_activity.probe_attempted = true;
@@ -1269,7 +1418,7 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                 } else {
                     shared.lock().unwrap().message = "Camera disconnected, changed or needs attention; press Update GPS now again after resolving it".into();
                 }
-                shared.lock().unwrap().manual_update_pending = false;
+                shared.lock().unwrap().manual_update_pending = storage_retry.is_some();
             }
             let (auto, ready, already) = {
                 let s = shared.lock().unwrap();
@@ -1290,51 +1439,40 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
                     s.matches_latest(),
                 )
             };
-            if (upload_requested
-                || (auto && ready && !already && !camera_activity.initial_expired(Instant::now())))
+            if auto
+                && ready
+                && !already
+                && !camera_activity.initial_expired(Instant::now())
                 && !config.monitor_only
+                && let Some(device) = device.as_ref()
             {
-                let force = upload_requested;
-                upload_requested = false;
-                if let Some(device) = device.as_ref() {
-                    if ready && camera_activity.can_access(Instant::now()) {
-                        camera_activity.automatic_attempted = true;
-                        camera_activity.probe_attempted = true;
-                        shared.lock().unwrap().message =
-                            "Validating predictions before upload".into();
-                        match upload(
-                            &config,
-                            &shared,
-                            device,
-                            if force {
-                                UploadKind::Again
-                            } else {
-                                UploadKind::Automatic
-                            },
-                        ) {
-                            Ok(()) => (),
-                            Err(e) => {
-                                let mut s = shared.lock().unwrap();
-                                s.message = format!("{e:#}");
-                                if camera::storage_in_use(&e) {
-                                    camera_activity.probe_attempted = s.camera.is_some();
-                                    s.phase = Phase::Idle;
-                                } else {
-                                    s.reconnect_required =
-                                        camera::requires_reconnect(&e) || s.phase.device_busy();
-                                    s.phase = Phase::Failed;
-                                }
-                            }
-                        }
-                        camera_activity.finished_access();
-                    } else {
-                        shared.lock().unwrap().message = if !device.mounts.is_empty() {
-                            "Unmount camera storage to update GPS assistance".into()
+                camera_activity.automatic_attempted = true;
+                camera_activity.probe_attempted = true;
+                shared.lock().unwrap().message = "Validating predictions before upload".into();
+                match upload(&config, &shared, device, UploadKind::Automatic) {
+                    Ok(()) => (),
+                    Err(e) => {
+                        let mut s = shared.lock().unwrap();
+                        s.message = format!("{e:#}");
+                        if camera::storage_in_use(&e) {
+                            s.phase = Phase::Idle;
+                            drop(s);
+                            release_storage(&shared, device);
+                            camera_activity.wait_for_storage();
+                            queue_storage_retry(
+                                &mut storage_retry,
+                                &shared,
+                                &last_connection,
+                                StorageOperation::Initial,
+                            );
                         } else {
-                            "Upload blocked until camera and prediction checks pass".into()
-                        };
+                            s.reconnect_required =
+                                camera::requires_reconnect(&e) || s.phase.device_busy();
+                            s.phase = Phase::Failed;
+                        }
                     }
                 }
+                camera_activity.finished_access();
             }
             if !camera_activity.storage_released
                 && let Some(device) = device.as_ref()
@@ -1364,6 +1502,7 @@ pub fn start(config: Config, shared: Shared, rx: mpsc::Receiver<Action>) {
 
 fn demo_connection(shared: &Shared, connected: bool) {
     let mut s = shared.lock().unwrap();
+    s.storage_retry_at = None;
     s.camera_note = None;
     s.storage_error = None;
     s.camera_cached = false;
@@ -1522,7 +1661,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_mount_skip_is_informational_and_does_not_change_the_snapshot() {
+    fn waiting_for_storage_is_informational_and_preserves_the_snapshot() {
         let at = Utc::now() - chrono::Duration::hours(3);
         let mut state = State {
             device: Some(Device {
@@ -1540,17 +1679,130 @@ mod tests {
         };
         state.storage_error = Some("old warning".into());
         let shared = Arc::new(Mutex::new(state));
-        note_automatic_mount(&shared);
+        let mut pending = None;
+        queue_storage_retry(&mut pending, &shared, "usb", StorageOperation::Initial);
         let s = shared.lock().unwrap();
         let activity = s.activity();
-        assert_eq!(activity.title, "Connected");
+        assert_eq!(activity.title, "Waiting to unmount");
         assert!(!activity.warning);
         assert!(!activity.busy);
-        assert!(activity.detail.contains("ready for browsing"));
-        assert!(activity.detail.contains("refresh"));
+        assert!(activity.detail.contains("30 seconds"));
         assert!(s.storage_error.is_none());
-        assert!(s.can_refresh_camera());
+        assert!(!s.can_refresh_camera());
         assert_eq!(s.camera.as_ref().unwrap().read_at, Some(at));
+    }
+
+    #[test]
+    fn busy_storage_retries_indefinitely_then_allows_the_initial_gps_update() {
+        let start = Instant::now();
+        let mut activity = CameraActivity::default();
+        activity.observe("usb", false, start);
+        assert!(activity.take_initial_preparation(start + Duration::from_secs(3)));
+        let state = State {
+            automatic: true,
+            device: Some(Device::default()),
+            data: DataInfo {
+                upload_allowed: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut now = start + Duration::from_secs(3);
+        for _ in 0..120 {
+            activity.wait_for_storage();
+            let mut retry = StorageRetry::new("usb", StorageOperation::Initial, now);
+            assert!(!activity.take_initial_preparation(now));
+            assert!(!activity.take_probe(now));
+            assert!(!activity.automatic_due(now));
+            assert!(!activity.should_release(now, &state));
+            assert!(!retry.due("usb", now + Duration::from_secs(29)));
+            now += STORAGE_RETRY_INTERVAL;
+            assert!(retry.due("usb", now));
+            assert!(!retry.due("another camera", now));
+            assert!(!retry.due("", now));
+            // Try now uses the same deadline and operation as automatic retry.
+            retry.at = now - STORAGE_RETRY_INTERVAL;
+            assert!(retry.due("usb", now));
+            assert_eq!(retry.operation, StorageOperation::Initial);
+            activity.retry_storage(now);
+            assert!(activity.take_initial_preparation(now));
+        }
+        activity.observe("usb", true, now);
+        assert!(activity.automatic_due(now));
+        assert!(activity.take_probe(now));
+        activity.automatic_attempted = true;
+        assert!(activity.should_release(now, &state));
+        activity.storage_released = true;
+        activity.observe("usb", false, now + Duration::from_secs(1));
+        assert!(!activity.take_initial_preparation(now + Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn manual_operations_wait_for_busy_storage_and_resume_without_replaying_a_transfer() {
+        let temp = crate::test_support::Temp::new();
+        let config = Config {
+            project: temp.path().into(),
+            state_dir: temp.path().into(),
+            demo: false,
+            monitor_only: false,
+        };
+        for refresh in [false, true] {
+            let device = Device::default();
+            let shared = Arc::new(Mutex::new(State {
+                device: Some(device.clone()),
+                ..Default::default()
+            }));
+            let transfers = std::cell::Cell::new(0);
+            let restores = std::cell::Cell::new(0);
+            for busy in [true, true, false] {
+                let prepare = |d: &Device| {
+                    if busy {
+                        Err(gtk::gio::DBusError::new_for_dbus_error(
+                            "org.freedesktop.UDisks2.Error.DeviceBusy",
+                            "Storage is busy",
+                        )
+                        .into())
+                    } else {
+                        Ok(d.clone())
+                    }
+                };
+                let restore = |_: &Device| {
+                    restores.set(restores.get() + 1);
+                    Ok(())
+                };
+                let waiting = if refresh {
+                    refresh_camera_with(
+                        &config,
+                        &shared,
+                        prepare,
+                        |_| {
+                            transfers.set(transfers.get() + 1);
+                            Ok(CameraInfo::default())
+                        },
+                        restore,
+                    )
+                } else {
+                    manual_upload_with(
+                        &shared,
+                        &device,
+                        prepare,
+                        |_| {
+                            transfers.set(transfers.get() + 1);
+                            Ok(())
+                        },
+                        restore,
+                    )
+                };
+                assert_eq!(waiting, busy);
+                let s = shared.lock().unwrap();
+                assert_eq!(s.phase, Phase::Idle);
+                assert!(s.storage_error.is_none());
+                assert!(s.camera_error.is_none());
+                assert!(!s.reconnect_required);
+            }
+            assert_eq!(transfers.get(), 1);
+            assert_eq!(restores.get(), 3);
+        }
     }
 
     #[test]
@@ -1877,13 +2129,13 @@ mod tests {
     }
 
     #[test]
-    fn initial_unmount_allowance_is_consumed_even_on_failure_and_only_reconnect_resets_it() {
+    fn completed_initial_preparation_is_not_repeated_until_reconnect() {
         let now = Instant::now();
         let mut activity = CameraActivity::default();
         activity.observe("usb-attachment", false, now);
         assert!(!activity.take_initial_preparation(now));
         assert!(activity.take_initial_preparation(now + Duration::from_secs(3)));
-        // Both a failed attempt and a successful unmount/remount consume it.
+        // Success and non-retryable failures consume the preparation allowance.
         for unmounted in [false, true, false, true] {
             activity.observe("usb-attachment", unmounted, now + Duration::from_secs(10));
             assert!(!activity.take_initial_preparation(now + Duration::from_secs(10)));
