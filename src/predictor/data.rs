@@ -195,8 +195,11 @@ pub struct Frames {
 }
 impl Frames {
     pub fn read(path: &Path) -> Result<Self> {
+        Self::parse(&fs::read_to_string(path)?)
+    }
+    pub fn parse(text: &str) -> Result<Self> {
         let mut eop = Vec::new();
-        for line in fs::read_to_string(path)?.lines() {
+        for line in text.lines() {
             if !line.is_ascii() || line.len() < 68 {
                 continue;
             }

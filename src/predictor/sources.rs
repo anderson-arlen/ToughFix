@@ -26,6 +26,9 @@ const CELESTRAK: &str = "https://celestrak.org/GPS/";
 const NOAA: &str = "https://noaa-cors-pds.s3.amazonaws.com/";
 const EOP: &str = "https://datacenter.iers.org/products/eop/rapid/standard/finals2000A.all";
 const EOP_BACKUP: &str = "https://maia.usno.navy.mil/ser7/finals2000A.all";
+// Astropy redistributes the original IERS table, independently of these hosts.
+const EOP_MIRROR: &str = "https://raw.githubusercontent.com/astropy/astropy-iers-data/main/astropy_iers_data/data/finals2000A.all";
+const EOP_FILE: &str = "finals2000A.all";
 const GRAVITY: &str = "https://earth-info.nga.mil/php/download.php?file=egm-96spherical";
 const GRAVITY_HASH: &str = "1f21ab8151c1b9fe25f483a4f6b78acdbf5306daf923725017b83d87a5f33472";
 
@@ -249,10 +252,11 @@ fn notice_inputs(
 
 fn earth_orientation(
     mut download: impl FnMut(&str) -> Result<Download>,
+    cached: Option<Download>,
     progress: &(impl Fn(Progress) + Sync),
 ) -> Result<Download> {
     let mut errors = Vec::new();
-    for (source, url) in [("IERS", EOP), ("USNO", EOP_BACKUP)] {
+    for (source, url) in [("IERS", EOP), ("USNO", EOP_BACKUP), ("Astropy", EOP_MIRROR)] {
         progress(Progress::new(
             RefreshStage::ModelInputs,
             format!("Downloading Earth orientation from {source}"),
@@ -262,7 +266,49 @@ fn earth_orientation(
             Err(e) => errors.push(format!("{source}: {e:#}")),
         }
     }
+    if let Some(cached) = cached {
+        // Preserve the original source, hash and timestamps. A failed request
+        // does not make cached data newly observed or newly downloaded.
+        eprintln!(
+            "ToughFix: using verified Earth-orientation cache: {}",
+            errors.join("; ")
+        );
+        progress(Progress::new(
+            RefreshStage::ModelInputs,
+            "Using verified cached Earth orientation while downloads are unavailable",
+        ));
+        return Ok(cached);
+    }
     anyhow::bail!("Earth-orientation downloads failed ({})", errors.join("; "))
+}
+
+fn validate_earth_orientation(bytes: &[u8], checked: f64) -> Result<()> {
+    let text = std::str::from_utf8(bytes).context("Invalid Earth-orientation encoding")?;
+    let frames = data::Frames::parse(text)?;
+    // Cover the historical fitting/validation arc and the full GPS forecast.
+    frames.matrix(checked - 32. * data::DAY)?;
+    frames.matrix(checked + 15. * data::DAY)?;
+    // Column 17 and 58 identify measured polar motion and UT1, respectively.
+    // Bound prediction age independently of HTTP dates or download timestamps.
+    // Astropy's IERS auto-refresh uses the same 30-day default age limit:
+    // https://docs.astropy.org/en/stable/utils/iers.html#auto-refresh-behavior
+    let latest = text
+        .lines()
+        .rev()
+        .find_map(|line| {
+            (line.is_ascii() && line.len() >= 68 && &line[16..17] == "I" && &line[57..58] == "I")
+                .then(|| line[7..15].trim().parse::<f64>().ok())
+                .flatten()
+                .filter(|mjd| mjd.is_finite())
+        })
+        .context("Earth orientation lacks measured polar motion and UT1")?;
+    let epoch = chrono::DateTime::from_timestamp(((latest - 40587.) * data::DAY).round() as i64, 0)
+        .context("Invalid Earth-orientation observation epoch")?;
+    ensure!(
+        (0. ..=30. * data::DAY).contains(&(checked - health::utc_gps(epoch)?)),
+        "Earth-orientation observations are stale or future dated"
+    );
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -463,6 +509,9 @@ impl Sources {
             "Empty or oversized source response"
         );
         let checked = health::now()?;
+        if file == EOP_FILE {
+            validate_earth_orientation(&bytes, checked)?;
+        }
         let known = modified
             .as_ref()
             .and_then(|s| chrono::DateTime::parse_from_rfc2822(s).ok())
@@ -500,6 +549,15 @@ impl Sources {
             .context("Missing required official source")?;
         self.manifest.insert(key.into(), m.clone());
         Ok(m)
+    }
+    fn cached_earth_orientation(&self, checked: f64) -> Option<Download> {
+        let meta = self.cached("earth_orientation", f64::INFINITY, checked)?;
+        if meta.file != EOP_FILE {
+            return None;
+        }
+        let bytes = fs::read(self.root.join(EOP_FILE)).ok()?;
+        validate_earth_orientation(&bytes, checked).ok()?;
+        Some(meta)
     }
     fn cached_notice(&self, number: &str, checked: f64) -> Option<Download> {
         // Numbered NANUs are published once. Freshness comes from the latest
@@ -762,13 +820,14 @@ impl Sources {
             RefreshStage::ModelInputs,
             "Refreshing Earth orientation and gravity inputs",
         ));
-        if self
-            .cached("earth_orientation", 86400., checked)
-            .filter(|m| m.file == "finals2000A.all")
-            .is_none()
+        let cached_eop = self.cached_earth_orientation(checked);
+        if cached_eop
+            .as_ref()
+            .is_none_or(|m| checked - m.retrieved_at_gps >= data::DAY)
         {
             earth_orientation(
-                |url| self.required("earth_orientation", url, "finals2000A.all"),
+                |url| self.required("earth_orientation", url, EOP_FILE),
+                cached_eop,
                 progress,
             )?;
         }
@@ -1260,13 +1319,14 @@ mod tests {
 
     #[test]
     fn official_earth_orientation_mirror_records_its_source_and_only_falls_back_on_failure() {
-        for fail_primary in [false, true] {
+        let urls = [EOP, EOP_BACKUP, EOP_MIRROR];
+        for failures in 0..urls.len() {
             let mut calls = Vec::new();
             let file = earth_orientation(
                 |url| {
                     calls.push(url.to_owned());
-                    if fail_primary && url == EOP {
-                        anyhow::bail!("primary timed out");
+                    if calls.len() <= failures {
+                        anyhow::bail!("source unavailable");
                     }
                     Ok(Download {
                         file: "finals2000A.all".into(),
@@ -1278,20 +1338,161 @@ mod tests {
                         http_last_modified: None,
                     })
                 },
+                None,
                 &|_| {},
             )
             .unwrap();
-            assert_eq!(file.url, if fail_primary { EOP_BACKUP } else { EOP });
-            assert_eq!(calls.len(), if fail_primary { 2 } else { 1 });
+            assert_eq!(file.url, urls[failures]);
+            assert_eq!(calls, urls[..=failures]);
         }
         let error = earth_orientation(
             |url| anyhow::bail!("Downloading {url}: connection failed"),
+            None,
             &|_| {},
         )
         .unwrap_err();
         let message = format!("{error:#}");
-        assert!(message.contains("IERS:") && message.contains("USNO:"));
-        assert!(message.contains(EOP) && message.contains(EOP_BACKUP));
+        assert!(
+            message.contains("IERS:") && message.contains("USNO:") && message.contains("Astropy:")
+        );
+        assert!(urls.iter().all(|url| message.contains(url)));
+    }
+
+    fn eop_table(last_measured_day: i64, last_day: i64) -> Vec<u8> {
+        let today = Utc::now().date_naive();
+        let mjd = today
+            .signed_duration_since(NaiveDate::from_ymd_opt(1858, 11, 17).unwrap())
+            .num_days();
+        let mut bytes = Vec::new();
+        for day in -40..=last_day {
+            let mut row = vec![b' '; 185];
+            row[7..15].copy_from_slice(format!("{:8.2}", (mjd + day) as f64).as_bytes());
+            row[16] = if day <= last_measured_day { b'I' } else { b'P' };
+            row[18..27].copy_from_slice(b" 0.123456");
+            row[37..46].copy_from_slice(b" 0.234567");
+            row[57] = row[16];
+            row[58..68].copy_from_slice(b"-0.0123456");
+            bytes.extend(row);
+            bytes.push(b'\n');
+        }
+        bytes
+    }
+
+    #[test]
+    fn earth_orientation_requires_recent_measurements_and_complete_forecast_coverage() {
+        let checked = health::now().unwrap();
+        assert!(validate_earth_orientation(&eop_table(-9, 20), checked).is_ok());
+        assert!(validate_earth_orientation(&eop_table(-29, 20), checked).is_ok());
+        for invalid in [
+            b"<html>Service unavailable</html>".to_vec(),
+            vec![255; 185],
+            eop_table(-31, 20),
+            eop_table(1, 20),
+            eop_table(-9, 14),
+        ] {
+            assert!(validate_earth_orientation(&invalid, checked).is_err());
+        }
+    }
+
+    #[test]
+    fn earth_orientation_outage_reuses_only_verified_cache_without_renewing_its_age() {
+        let temp = crate::test_support::Temp::new();
+        let mut source = Sources::new(temp.path()).unwrap();
+        let checked = health::now().unwrap();
+        let bytes = eop_table(-9, 20);
+        let meta = Download {
+            file: EOP_FILE.into(),
+            url: EOP.into(),
+            bytes: bytes.len(),
+            sha256: crate::camera::hash(&bytes),
+            retrieved_at_gps: checked - 3. * data::DAY,
+            known_at_gps: checked - 9. * data::DAY,
+            http_last_modified: None,
+        };
+        files::atomic(&temp.path().join(EOP_FILE), &bytes).unwrap();
+        source
+            .manifest
+            .insert("earth_orientation".into(), meta.clone());
+        assert!(
+            source
+                .cached("earth_orientation", data::DAY, checked)
+                .is_none()
+        );
+        let cached = source.cached_earth_orientation(checked).unwrap();
+        let mut calls = 0;
+        let used = earth_orientation(
+            |_| {
+                calls += 1;
+                anyhow::bail!("source unavailable")
+            },
+            Some(cached),
+            &|_| {},
+        )
+        .unwrap();
+        assert_eq!(calls, 3);
+        assert_eq!(
+            serde_json::to_value(&used).unwrap(),
+            serde_json::to_value(&meta).unwrap()
+        );
+        files::atomic(&temp.path().join(EOP_FILE), b"corrupted").unwrap();
+        assert!(source.cached_earth_orientation(checked).is_none());
+        let stale = eop_table(-31, 20);
+        files::atomic(&temp.path().join(EOP_FILE), &stale).unwrap();
+        let entry = source.manifest.get_mut("earth_orientation").unwrap();
+        entry.bytes = stale.len();
+        entry.sha256 = crate::camera::hash(&stale);
+        entry.retrieved_at_gps = checked;
+        assert!(source.cached_earth_orientation(checked).is_none());
+    }
+
+    #[test]
+    fn invalid_earth_orientation_response_cannot_overwrite_the_last_good_table() {
+        use std::{io::Write, net::TcpListener};
+        let temp = crate::test_support::Temp::new();
+        let bytes = eop_table(-9, 20);
+        files::atomic(&temp.path().join(EOP_FILE), &bytes).unwrap();
+        let mut source = Sources::new(temp.path()).unwrap();
+        source.client = Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/eop", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut connection, _) = listener.accept().unwrap();
+            connection
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 4096];
+            assert!(connection.read(&mut request).unwrap() > 0);
+            connection
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\n<html>",
+                )
+                .unwrap();
+        });
+        assert!(source.fetch_once(&url, EOP_FILE, false).is_err());
+        server.join().unwrap();
+        assert_eq!(fs::read(temp.path().join(EOP_FILE)).unwrap(), bytes);
+        assert!(!source.manifest.contains_key("earth_orientation"));
+    }
+
+    #[test]
+    #[ignore = "requires live Earth-orientation downloads"]
+    fn live_earth_orientation_download_validates_with_the_app_http_client() {
+        let temp = crate::test_support::Temp::new();
+        let mut source = Sources::new(temp.path()).unwrap();
+        let meta = earth_orientation(
+            |url| source.required("earth_orientation", url, EOP_FILE),
+            None,
+            &|progress| eprintln!("{progress}"),
+        )
+        .unwrap();
+        let bytes = fs::read(temp.path().join(EOP_FILE)).unwrap();
+        validate_earth_orientation(&bytes, health::now().unwrap()).unwrap();
+        assert_eq!(crate::camera::hash(&bytes), meta.sha256);
+        eprintln!("Validated {} bytes from {}", bytes.len(), meta.url);
     }
 
     #[test]

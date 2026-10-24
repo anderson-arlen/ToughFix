@@ -269,7 +269,7 @@ running if you want ongoing refreshes.
 
 Health uses the full current-year Coast Guard NANU archive and retained prior
 references, the operational advisory, NOAA observed rapid/ultra-rapid GPS SP3
-samples, IERS Earth orientation (with USNO as backup), and pinned NGA EGM96. Predicted SP3 positions
+samples, IERS Earth orientation (with USNO and Astropy's IERS data mirror as backups), and pinned NGA EGM96. Predicted SP3 positions
 and clocks are never fitted. Rapid observations take priority on overlap;
 observed Ultra-rapid data extend the three-day arc. Each satellite's clocks
 pass separate residual gates or fall back to a recent Rapid fit; the dashboard
@@ -278,6 +278,13 @@ observed disruptions remove unsafe satellite weeks; recovery needs a clean new
 fit. Network failures, malformed sources, stale health or observations, expired
 predictions, CRC/slot errors, and fewer than four usable current-week satellites
 block uploads. Existing assistance is never relabeled current.
+
+Earth-orientation downloads are validated before replacing the cached table.
+If all three sources are unavailable, a hash-verified cached table may be used
+only while its latest measured polar motion and UT1 values are at most 30 days
+old and it covers the historical validation arc and the complete GPS forecast.
+The original source and timestamps are preserved. Download attempts resume on
+the next refresh; satellite-health and orbit-observation freshness checks still apply.
 
 The native `toughfix refresh` command exercises downloads, generation, guarding,
 and publication **without camera access**:

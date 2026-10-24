@@ -209,7 +209,7 @@ from a worldwide network to produce precise satellite orbit and clock products.
 | --- | --- | --- |
 | Observed GPS positions and clocks | IGS products distributed through [NOAA's public archive](https://www.ngs.noaa.gov/CORS/data.shtml) | Three days of 15-minute observations: Rapid preferred on overlap, observed Ultra-rapid extends the arc; also used for health checks |
 | Earth's gravity field | [NGA EGM96](https://earth-info.nga.mil/index.php?dir=wgs84&action=wgs84) | Gravity coefficients through degree and order 8 |
-| Earth orientation | [IERS official mirror](https://datacenter.iers.org/products/eop/rapid/standard/), with [USNO](https://maia.usno.navy.mil/) as backup | The same `finals2000A.all` polar-motion and UT1−UTC data for Earth-fixed/inertial transformations |
+| Earth orientation | [IERS official mirror](https://datacenter.iers.org/products/eop/rapid/standard/), with [USNO](https://maia.usno.navy.mil/) and [Astropy's IERS data mirror](https://github.com/astropy/astropy-iers-data) as backups | The same `finals2000A.all` polar-motion and UT1−UTC data for Earth-fixed/inertial transformations |
 | Satellite health and maneuver notices | [US Coast Guard NAVCEN](https://www.navcen.uscg.gov/gps-nanus-almanacs-opsadvisories-sof), with the [CelesTrak mirror](https://celestrak.org/GPS/) as backup | Outage, maintenance, and maneuver quarantine |
 
 NOAA distributes the orbit products; it is not their sole producer. Predicted
