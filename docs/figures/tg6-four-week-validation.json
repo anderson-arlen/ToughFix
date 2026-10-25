@@ -1,0 +1,1386 @@
+{
+  "date": "2026-10-24",
+  "policy": "TG-6 four-week broad coverage; recent-data checks and full-span satellite health; long-range historical clock errors diagnostic",
+  "official_sample": {
+    "sha256": "09a0f53b3d20bcd8d982e403be717834c7942cec70c1f73c70ed5a48b5965993",
+    "satellites": 28,
+    "states_per_satellite": 336,
+    "forecast_days": 28,
+    "bytes": 262144,
+    "satellite_region_offset": 1836,
+    "ancillary_scalar_counts": [
+      36,
+      186,
+      33,
+      66,
+      126
+    ],
+    "clock_reference_days_before_first_state": 2
+  },
+  "current_candidate": {
+    "sha256": "3bf9dcbc2b51d6cad01f6273440f794d66b9046194f0261eb23afef0464bbf96",
+    "forecast_start_gps": "2026-10-24T18:00:00",
+    "end_exclusive_gps": "2026-11-21T18:00:00",
+    "bytes": 262144,
+    "logical_bytes": 220216,
+    "satellites": 27,
+    "prns": [
+      1,
+      2,
+      3,
+      4,
+      6,
+      7,
+      9,
+      10,
+      11,
+      13,
+      14,
+      16,
+      17,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32
+    ],
+    "health_exclusions": [
+      12,
+      15,
+      18
+    ],
+    "source_or_fit_exclusions": [
+      {
+        "prn": 5,
+        "reason": "Eclipse/integration convergence exceeds 0.05 m RMS or 0.5 m maximum"
+      },
+      {
+        "prn": 8,
+        "reason": "Missing observed orbital sample"
+      }
+    ],
+    "format_exclusions": [],
+    "upload_allowed_at_check": true,
+    "python_encoder_parity": "All 262144 bytes of the raw 30-satellite four-week candidate match an independent ERFA/NumPy encoder"
+  },
+  "clock_study": {
+    "summary": {
+      "1d": {
+        "forecasts": 2301,
+        "median_rms_ns": 2.066835976252782,
+        "p95_rms_ns": 9.391891521047732,
+        "maximum_absolute_ns": 610.8888515890206,
+        "fraction_rms_over_100_ns": 0.0,
+        "fraction_max_over_300_ns": 0.000434593654932638
+      },
+      "3d": {
+        "forecasts": 2301,
+        "median_rms_ns": 5.210104317463716,
+        "p95_rms_ns": 27.651160313932678,
+        "maximum_absolute_ns": 613.0412160859936,
+        "fraction_rms_over_100_ns": 0.0,
+        "fraction_max_over_300_ns": 0.001303780964797914
+      },
+      "7d": {
+        "forecasts": 2301,
+        "median_rms_ns": 14.813547517692149,
+        "p95_rms_ns": 92.83805087027433,
+        "maximum_absolute_ns": 614.2054202250107,
+        "fraction_rms_over_100_ns": 0.010430247718383311,
+        "fraction_max_over_300_ns": 0.003042155584528466
+      },
+      "14d": {
+        "forecasts": 2301,
+        "median_rms_ns": 42.20642599941454,
+        "p95_rms_ns": 293.0089463660468,
+        "maximum_absolute_ns": 670.9335957850222,
+        "fraction_rms_over_100_ns": 0.3615819209039548,
+        "fraction_max_over_300_ns": 0.26597131681877445
+      },
+      "28d": {
+        "forecasts": 2301,
+        "median_rms_ns": 141.82060519103607,
+        "p95_rms_ns": 1020.761260961045,
+        "maximum_absolute_ns": 2414.552936328947,
+        "fraction_rms_over_100_ns": 0.5988700564971752,
+        "fraction_max_over_300_ns": 0.5132551064754455
+      }
+    },
+    "matched_forecasts": 2301,
+    "available_comparisons": {
+      "1d": 2375,
+      "3d": 2361,
+      "7d": 2342,
+      "14d": 2322,
+      "28d": 2301
+    },
+    "encoded_clock_coverage": {
+      "minimum": 30,
+      "median": 32.0,
+      "maximum": 32,
+      "cutoffs": 76
+    },
+    "rejected_forecasts": 48,
+    "fitter_sha256": "9cc56b50cd50e4a0a72b52c91483badd5c5b6176f2516adfffd2770ea19b07d4",
+    "encoder_sha256": "f64561c53748c0ef98a746d23d73a00cb92053d365015d903cc17cb7ddff6c85",
+    "sources": [
+      {
+        "file": "IGS0OPSRAP_20261820000_01D_15M_ORB.SP3.gz",
+        "sha256": "e3f5e7ca6c677da3f432116ebfc20cd684ac69f559b613a0397e99aa18f34e43"
+      },
+      {
+        "file": "IGS0OPSRAP_20261830000_01D_15M_ORB.SP3.gz",
+        "sha256": "67d1f0132d7b31e6bb50f3ba6899646567f3d7cf9e28566735be7bb900c881d4"
+      },
+      {
+        "file": "IGS0OPSRAP_20261840000_01D_15M_ORB.SP3.gz",
+        "sha256": "6048b348bac006dc47d0e6b2ee7be790b7312f37e8d2be0727d75160976aae3a"
+      },
+      {
+        "file": "IGS0OPSRAP_20261850000_01D_15M_ORB.SP3.gz",
+        "sha256": "dc30a4befd2b201ae86abcf4ce29cd5efc36dd1ae30b20f115152d33e412ff6c"
+      },
+      {
+        "file": "IGS0OPSRAP_20261860000_01D_15M_ORB.SP3.gz",
+        "sha256": "164d2e5bf6f4297a6cd38de1c97a3b4c6303f696d9c524339586bc12fc5c8e57"
+      },
+      {
+        "file": "IGS0OPSRAP_20261870000_01D_15M_ORB.SP3.gz",
+        "sha256": "9149c7c23b0f2bbebceb74cc6ca58ba0387090a18c5658a00fa5436bef1bb7fc"
+      },
+      {
+        "file": "IGS0OPSRAP_20261880000_01D_15M_ORB.SP3.gz",
+        "sha256": "79d690a49f6db0f0286540d8874e164c693b4a96e01cf69e67551bb7ac54f413"
+      },
+      {
+        "file": "IGS0OPSRAP_20261890000_01D_15M_ORB.SP3.gz",
+        "sha256": "13bde3dd30a7325a8778d823abe74ff4a2e11cc0e883b6471351f123d445f7e7"
+      },
+      {
+        "file": "IGS0OPSRAP_20261900000_01D_15M_ORB.SP3.gz",
+        "sha256": "e1e2489e883396a0d3a7fcf7598523c664ca7094906ac09da41872e765cf6f34"
+      },
+      {
+        "file": "IGS0OPSRAP_20261910000_01D_15M_ORB.SP3.gz",
+        "sha256": "1e9efa9e11000116d6974f5d447bc83a2a006da3f152e1e14a866952aa4038fe"
+      },
+      {
+        "file": "IGS0OPSRAP_20261920000_01D_15M_ORB.SP3.gz",
+        "sha256": "f8d6387f31b17c43be70d8dfbf0012be700459dd4d1813960a409e9198dd389d"
+      },
+      {
+        "file": "IGS0OPSRAP_20261930000_01D_15M_ORB.SP3.gz",
+        "sha256": "108493ee030ff0e56e1573a64fa86bc5c8d6902d4159ecfc6981975f55b5d45b"
+      },
+      {
+        "file": "IGS0OPSRAP_20261940000_01D_15M_ORB.SP3.gz",
+        "sha256": "33c584f8ad84f55e0fca57f23a594b4f8dc49130c95fc9bb7ecdd0ba1f72ab44"
+      },
+      {
+        "file": "IGS0OPSRAP_20261950000_01D_15M_ORB.SP3.gz",
+        "sha256": "048441bcf9cd43438b61d1914ad4020ce18b5b35c37ebb7e5328ae9b93c6098b"
+      },
+      {
+        "file": "IGS0OPSRAP_20261960000_01D_15M_ORB.SP3.gz",
+        "sha256": "f2f2a129232ea743f5d452b11f30b5b683ebd7132db777bdb8130b6cf2781467"
+      },
+      {
+        "file": "IGS0OPSRAP_20261970000_01D_15M_ORB.SP3.gz",
+        "sha256": "bd2d782906f56dae3c58746daf8cff2fb06e46a2e14c6d090d17c005fe634e11"
+      },
+      {
+        "file": "IGS0OPSRAP_20261980000_01D_15M_ORB.SP3.gz",
+        "sha256": "807df00a953f193eabdbf7add0efdb8616978371ee52f331291faa3d5e563308"
+      },
+      {
+        "file": "IGS0OPSRAP_20261990000_01D_15M_ORB.SP3.gz",
+        "sha256": "331501488721c2583df6617ede5ddd9b3481990816405e6f4adbbe0630c43161"
+      },
+      {
+        "file": "IGS0OPSRAP_20262000000_01D_15M_ORB.SP3.gz",
+        "sha256": "b063df1cc0167bfb6a4b39e2ebaf776e94b13b139e8bd1686064f598cd1cc98a"
+      },
+      {
+        "file": "IGS0OPSRAP_20262010000_01D_15M_ORB.SP3.gz",
+        "sha256": "0cd8320d3b187a09603ee853a734d3ca2b24963b0f4d1a2a0f7eb23f5cc5db19"
+      },
+      {
+        "file": "IGS0OPSRAP_20262020000_01D_15M_ORB.SP3.gz",
+        "sha256": "092b24146fdca028ca1c4ae1d61fd948a80ed18ae3dd3c99c32c9fa642b156dd"
+      },
+      {
+        "file": "IGS0OPSRAP_20262030000_01D_15M_ORB.SP3.gz",
+        "sha256": "f6003b7d68b6da01d267532dffd9adde36597643306389f3d32d65cc606f2a44"
+      },
+      {
+        "file": "IGS0OPSRAP_20262040000_01D_15M_ORB.SP3.gz",
+        "sha256": "8000bc39efed56747b5d19f0d4eb70c57d405a4926ef08c10ff1e2fa1b81a007"
+      },
+      {
+        "file": "IGS0OPSRAP_20262050000_01D_15M_ORB.SP3.gz",
+        "sha256": "c9a7f0a81d350f35a5dc0c0ae7170f2543c76b5b2be8627a6a4b0fe4c599f9f8"
+      },
+      {
+        "file": "IGS0OPSRAP_20262060000_01D_15M_ORB.SP3.gz",
+        "sha256": "a5f1ddf33c3ab219751a9afc196742b578872e0c67fe9de1c400a229943a317a"
+      },
+      {
+        "file": "IGS0OPSRAP_20262070000_01D_15M_ORB.SP3.gz",
+        "sha256": "129710fe1aff61230061f13403de69c4f0936218edf6ad20a68169359f34a871"
+      },
+      {
+        "file": "IGS0OPSRAP_20262080000_01D_15M_ORB.SP3.gz",
+        "sha256": "7405044fde1382e6ec614af4b4701f0ec807ba9ba0d5c84bc48616bff0d1ad20"
+      },
+      {
+        "file": "IGS0OPSRAP_20262090000_01D_15M_ORB.SP3.gz",
+        "sha256": "453daeec2cf6ce7b792e700967f0344d9c7f8b0239f02a76e049e45d0df3ba39"
+      },
+      {
+        "file": "IGS0OPSRAP_20262100000_01D_15M_ORB.SP3.gz",
+        "sha256": "a4d7723389d0c65ef1af9f993cd7849f70a4f09c04881278eb3cd99e9f5dd0b9"
+      },
+      {
+        "file": "IGS0OPSRAP_20262110000_01D_15M_ORB.SP3.gz",
+        "sha256": "c32ecde7dbc866ff583ed0946f8ad12d55f4e378143f02d8f707762c29beafc8"
+      },
+      {
+        "file": "IGS0OPSRAP_20262120000_01D_15M_ORB.SP3.gz",
+        "sha256": "d0e38e2427e50bece0897c511f03bd47b07aeb84ad17d0c88784be3a11e5b738"
+      },
+      {
+        "file": "IGS0OPSRAP_20262130000_01D_15M_ORB.SP3.gz",
+        "sha256": "7ff7b241b1600de267d0d2836ce394cdd449068f30438b0b3943f1a39c975c88"
+      },
+      {
+        "file": "IGS0OPSRAP_20262140000_01D_15M_ORB.SP3.gz",
+        "sha256": "09308804be15499b15df38f55f4089e4de2559f1f8686a024a90c1c1f17f6573"
+      },
+      {
+        "file": "IGS0OPSRAP_20262150000_01D_15M_ORB.SP3.gz",
+        "sha256": "06e2f89bc274d9638af387e71421ef14199a55cd064acb71ef2eb93beaa7a662"
+      },
+      {
+        "file": "IGS0OPSRAP_20262160000_01D_15M_ORB.SP3.gz",
+        "sha256": "129123d2519f5d4a5118ed04a02046f83f5fd9be0caa64f6fcde248fbf7ea16c"
+      },
+      {
+        "file": "IGS0OPSRAP_20262170000_01D_15M_ORB.SP3.gz",
+        "sha256": "3da74f61fac5f489b66c08dfbf2b46c68fa8135a8307766678223fda9fa08aea"
+      },
+      {
+        "file": "IGS0OPSRAP_20262180000_01D_15M_ORB.SP3.gz",
+        "sha256": "901bccf22154c5975f87095d6b8aa1d8f9e265bb13072b64f14da9df1630ac8c"
+      },
+      {
+        "file": "IGS0OPSRAP_20262190000_01D_15M_ORB.SP3.gz",
+        "sha256": "5561762a8373e777df593b820b418801a7a36dc7db2221b5e028ec71dee73113"
+      },
+      {
+        "file": "IGS0OPSRAP_20262200000_01D_15M_ORB.SP3.gz",
+        "sha256": "768657a949a367ec6fccae6ac0c1ba8f668da59fa5e131a97df70d2c64446ef9"
+      },
+      {
+        "file": "IGS0OPSRAP_20262210000_01D_15M_ORB.SP3.gz",
+        "sha256": "b0ffb3cb6075ad03b1e0ff03d9778ffd0418cb8652dcbce213832dbaf1244e8d"
+      },
+      {
+        "file": "IGS0OPSRAP_20262220000_01D_15M_ORB.SP3.gz",
+        "sha256": "b21f51625dff56991052fe5dba7337ac3b715f5a5184d19ae1109b64d31998bf"
+      },
+      {
+        "file": "IGS0OPSRAP_20262230000_01D_15M_ORB.SP3.gz",
+        "sha256": "416c8e22b4bc9225d1b155864398eb7fd207019ae857a80c6ab82a7d52d27106"
+      },
+      {
+        "file": "IGS0OPSRAP_20262240000_01D_15M_ORB.SP3.gz",
+        "sha256": "f80c570cb96ad5ecbbc2ba96cc57034839bdcc37e4156f38b3d7db5fb0b0597e"
+      },
+      {
+        "file": "IGS0OPSRAP_20262250000_01D_15M_ORB.SP3.gz",
+        "sha256": "c07a20fcc3fbcba37d66045e3fcf45e5687f951b214dd6b5188c984bb27db939"
+      },
+      {
+        "file": "IGS0OPSRAP_20262260000_01D_15M_ORB.SP3.gz",
+        "sha256": "75af40d8d3502694e4ab50f3d7983980f8d0c569e3b0be4d64016b67e6919a83"
+      },
+      {
+        "file": "IGS0OPSRAP_20262270000_01D_15M_ORB.SP3.gz",
+        "sha256": "32cb95ddcdcea2b68d7e14f07cdbb2821f155f8b28eb679621a1d7f942769704"
+      },
+      {
+        "file": "IGS0OPSRAP_20262280000_01D_15M_ORB.SP3.gz",
+        "sha256": "33f3cf5fed2ae9e3e548b65103b55538e7304edfe11c800534ae8ecfd1433c56"
+      },
+      {
+        "file": "IGS0OPSRAP_20262290000_01D_15M_ORB.SP3.gz",
+        "sha256": "b806f8b74590d5840aa7ad700a7a37af282d541efd21f370ca2f28350e668934"
+      },
+      {
+        "file": "IGS0OPSRAP_20262300000_01D_15M_ORB.SP3.gz",
+        "sha256": "a11366c510e1160b6137e8b5c0ef3c7e48e5cc230a2a7fcd73d84b08b577d819"
+      },
+      {
+        "file": "IGS0OPSRAP_20262310000_01D_15M_ORB.SP3.gz",
+        "sha256": "c9814769c4e72975cab6cd1d60d85a59c7cf958fb3e0efddc5296a52a695e6c1"
+      },
+      {
+        "file": "IGS0OPSRAP_20262320000_01D_15M_ORB.SP3.gz",
+        "sha256": "f5f9e62d8fc2f2ad04318369c93ff1dbc76c48bc2dbb5df9b7e955c4ad8740a4"
+      },
+      {
+        "file": "IGS0OPSRAP_20262330000_01D_15M_ORB.SP3.gz",
+        "sha256": "2f20664de756548c57b82f7196ef85db5f5a1c71ca4547f74ce1336a8c959a52"
+      },
+      {
+        "file": "IGS0OPSRAP_20262340000_01D_15M_ORB.SP3.gz",
+        "sha256": "69e1b2300f4ad0adad53dab35dbd472f94c86128e25be07235c838014cf637c5"
+      },
+      {
+        "file": "IGS0OPSRAP_20262350000_01D_15M_ORB.SP3.gz",
+        "sha256": "1a734a7d6fb42c89d2d5d08517fb74660e342cefc7afae5dbbcfce1ca0f933ec"
+      },
+      {
+        "file": "IGS0OPSRAP_20262360000_01D_15M_ORB.SP3.gz",
+        "sha256": "842df77b886efcf71017ca1a2fb9d026b34b25bab82944222752a02d963403ed"
+      },
+      {
+        "file": "IGS0OPSRAP_20262370000_01D_15M_ORB.SP3.gz",
+        "sha256": "3b020296da9f88b3748e98edf87c62441c0fa299730461d1daebd24d852e8e62"
+      },
+      {
+        "file": "IGS0OPSRAP_20262380000_01D_15M_ORB.SP3.gz",
+        "sha256": "f7464b877d23d322d398e1c9ff8ef4e4e9dd6c5d60503ce8055f943614044ede"
+      },
+      {
+        "file": "IGS0OPSRAP_20262390000_01D_15M_ORB.SP3.gz",
+        "sha256": "8e641485f3365c76a3fd293352e2887870027e4a5cd24dad453213f194eca758"
+      },
+      {
+        "file": "IGS0OPSRAP_20262400000_01D_15M_ORB.SP3.gz",
+        "sha256": "40cef3fefd824bf20da59a9a6d26384f888902b8b9f163c83334a060a9ca9144"
+      },
+      {
+        "file": "IGS0OPSRAP_20262410000_01D_15M_ORB.SP3.gz",
+        "sha256": "ecc49e67a50f5db62dfa79409a28308db294ea6cedc17ca8f8b8e81c93961970"
+      },
+      {
+        "file": "IGS0OPSRAP_20262420000_01D_15M_ORB.SP3.gz",
+        "sha256": "d752130dbcb3c7569945c10ab05f1602aa4a6aa7fab42f81e38108d5bcbd0925"
+      },
+      {
+        "file": "IGS0OPSRAP_20262430000_01D_15M_ORB.SP3.gz",
+        "sha256": "1e74a65849037d2b4dda230e5d0da3fb07edd404a3eea381b7ff3c5afc143e6f"
+      },
+      {
+        "file": "IGS0OPSRAP_20262440000_01D_15M_ORB.SP3.gz",
+        "sha256": "9e7f4da27bc5e25ee9a96210d69f383de766140c0df62e733c5006dc6186f9eb"
+      },
+      {
+        "file": "IGS0OPSRAP_20262450000_01D_15M_ORB.SP3.gz",
+        "sha256": "645e05fc4fc7fb4279e21a200312ac2fdb415093173a56c637b7d76e7294112b"
+      },
+      {
+        "file": "IGS0OPSRAP_20262460000_01D_15M_ORB.SP3.gz",
+        "sha256": "03be793d7ee12dbd5025970486e6a47b2c820cfe8b85eeb2ac80234a77f48658"
+      },
+      {
+        "file": "IGS0OPSRAP_20262470000_01D_15M_ORB.SP3.gz",
+        "sha256": "9606d48f2c9ce235a46116292912e90e24a7f472c3b541bd810ad793290a9eed"
+      },
+      {
+        "file": "IGS0OPSRAP_20262480000_01D_15M_ORB.SP3.gz",
+        "sha256": "371100dd76c6506187a957444080f4ea7ae63decae0fc17c42f5406a5900b62e"
+      },
+      {
+        "file": "IGS0OPSRAP_20262490000_01D_15M_ORB.SP3.gz",
+        "sha256": "d7fec99718c6151098a014e8bf3c31fcde0bea5244a3cf9c2c3e662a80042551"
+      },
+      {
+        "file": "IGS0OPSRAP_20262500000_01D_15M_ORB.SP3.gz",
+        "sha256": "9a163863e222599ac511fd923670d2e342d157ef2360aa7ff2ae298dcd69d485"
+      },
+      {
+        "file": "IGS0OPSRAP_20262510000_01D_15M_ORB.SP3.gz",
+        "sha256": "221b23b3052f98a20e2dbe7b11da1e01f02990ac7292e3cb43201ff3dcc27b43"
+      },
+      {
+        "file": "IGS0OPSRAP_20262520000_01D_15M_ORB.SP3.gz",
+        "sha256": "a3a43b298cb08a743a680813c97a9d7955b395354ad3c20aea9fb7a4ce2049c5"
+      },
+      {
+        "file": "IGS0OPSRAP_20262530000_01D_15M_ORB.SP3.gz",
+        "sha256": "8e2b5f027d590f76dd6a774b1b9aed93053d9fb74d71849f0fab47287f65181d"
+      },
+      {
+        "file": "IGS0OPSRAP_20262540000_01D_15M_ORB.SP3.gz",
+        "sha256": "5234d486417ae21f2c2a80d76469e549cc8066aefb0d36a16ca2507bcd0e8cf2"
+      },
+      {
+        "file": "IGS0OPSRAP_20262550000_01D_15M_ORB.SP3.gz",
+        "sha256": "393bc63a26657f4e01b675b96d5a2e16a5f8742919e7024e87b0968232d8980c"
+      },
+      {
+        "file": "IGS0OPSRAP_20262560000_01D_15M_ORB.SP3.gz",
+        "sha256": "632b6f182463abf4fb48d231af44de68362dec4e9b6386816db5159d8102b745"
+      },
+      {
+        "file": "IGS0OPSRAP_20262570000_01D_15M_ORB.SP3.gz",
+        "sha256": "2e08d9157eec125205513158bca0bc3c3cbb0986533d729032402d7c4c5b714d"
+      },
+      {
+        "file": "IGS0OPSRAP_20262580000_01D_15M_ORB.SP3.gz",
+        "sha256": "2658920c825af93590b373459b7104065340827335626f1ce19a37ba6c9d15af"
+      },
+      {
+        "file": "IGS0OPSRAP_20262590000_01D_15M_ORB.SP3.gz",
+        "sha256": "83b749eb93958d61a6c1717f7011c10d03913b050a6cdce5b74c7fec40fae91a"
+      },
+      {
+        "file": "IGS0OPSRAP_20262600000_01D_15M_ORB.SP3.gz",
+        "sha256": "31619e2d2f1a9c7c06eb4604e907adfe561f00c43f66820e40e93faef709469f"
+      },
+      {
+        "file": "IGS0OPSRAP_20262610000_01D_15M_ORB.SP3.gz",
+        "sha256": "9227f3bd865452aa0584fd0e93ae2d7447421b80151ace0ece37e02d54e7a64b"
+      },
+      {
+        "file": "IGS0OPSRAP_20262620000_01D_15M_ORB.SP3.gz",
+        "sha256": "b78746ff66cad31b6c6a46ebd1ec10679f35f534624b372837bdec49136187ad"
+      },
+      {
+        "file": "IGS0OPSRAP_20262630000_01D_15M_ORB.SP3.gz",
+        "sha256": "3ad9b1af10c7c0f406b2ca1f6266350b35612bcede9bb259b5a6747fbababda1"
+      },
+      {
+        "file": "IGS0OPSRAP_20262640000_01D_15M_ORB.SP3.gz",
+        "sha256": "ad7dd776a4356c68adc5a433485cfec213d335f3c4b25f2c37422ecfb57551bb"
+      },
+      {
+        "file": "IGS0OPSRAP_20262650000_01D_15M_ORB.SP3.gz",
+        "sha256": "884981e48422a30c6502008e6d80f5b949cbd75c4ada562d2c9241d4d084b498"
+      },
+      {
+        "file": "IGS0OPSRAP_20262660000_01D_15M_ORB.SP3.gz",
+        "sha256": "f77be74d113d9c9b9c47ce72425d0405ab121f1b7e1a5d4565e911665979520c"
+      },
+      {
+        "file": "IGS0OPSRAP_20262670000_01D_15M_ORB.SP3.gz",
+        "sha256": "9d6c732ff7be45ab1c74a5ea295ce8380a3263b3b433df58e6492f5e3ce39f77"
+      },
+      {
+        "file": "IGS0OPSRAP_20262680000_01D_15M_ORB.SP3.gz",
+        "sha256": "71e19b09de123c944e39c09d5de6060d0b5b4c08ca7c88cad962bf81ad6df3ff"
+      },
+      {
+        "file": "IGS0OPSRAP_20262690000_01D_15M_ORB.SP3.gz",
+        "sha256": "b4d3f68bdb985599595fca452422e31b0cb7d6d8da41103fd567dcb5ac3cbd63"
+      },
+      {
+        "file": "IGS0OPSRAP_20262700000_01D_15M_ORB.SP3.gz",
+        "sha256": "6437b9c10d4ad4c0cf8f17b22bbe2fc978c3b655603265722fd5213d0d4c272f"
+      },
+      {
+        "file": "IGS0OPSRAP_20262710000_01D_15M_ORB.SP3.gz",
+        "sha256": "ca993f8af1ec8308236a15808287a24c4dd7d58df933e35de0307d50164206e1"
+      },
+      {
+        "file": "IGS0OPSRAP_20262720000_01D_15M_ORB.SP3.gz",
+        "sha256": "eb30bc552dcfe7665f53d8cecf593d8cae14a3bf569688f6896ced58e702f871"
+      },
+      {
+        "file": "IGS0OPSRAP_20262730000_01D_15M_ORB.SP3.gz",
+        "sha256": "651453f3a3269e46ce57431ccf22e7b2242d09f00b8d266734f4409ea4e553fa"
+      },
+      {
+        "file": "IGS0OPSRAP_20262740000_01D_15M_ORB.SP3.gz",
+        "sha256": "40306ac09a1f211c3031d41871ddd671a86910a92f0a96fd6977264dcb2bca14"
+      },
+      {
+        "file": "IGS0OPSRAP_20262750000_01D_15M_ORB.SP3.gz",
+        "sha256": "3ba38ed6388518e4a48e41524d7f1fef5728a0254b570ed9ca9848fb2579d6af"
+      },
+      {
+        "file": "IGS0OPSRAP_20262760000_01D_15M_ORB.SP3.gz",
+        "sha256": "89f4ff3cc7e0713c47f29bbcbe3af5a1f079b51334ea725566c870fb2dbaa470"
+      },
+      {
+        "file": "IGS0OPSRAP_20262770000_01D_15M_ORB.SP3.gz",
+        "sha256": "ca064777f32d29e7eb9c5159792a99edeffa5d84542619d968b55bd0b8076192"
+      },
+      {
+        "file": "IGS0OPSRAP_20262780000_01D_15M_ORB.SP3.gz",
+        "sha256": "844d9846870b214768dd6d1be4f70236e6dc9ee8c97a22ca3da6502a3ae596b6"
+      },
+      {
+        "file": "IGS0OPSRAP_20262790000_01D_15M_ORB.SP3.gz",
+        "sha256": "0355045400c361fdd3c5498c6033c02d4e0d36a7a2eb873ff284a03ec63c9697"
+      },
+      {
+        "file": "IGS0OPSRAP_20262800000_01D_15M_ORB.SP3.gz",
+        "sha256": "09f0e081b187f3ce9f0f4796075bef6c4ae574afe5a5b3179ad97438fbf7e5bd"
+      },
+      {
+        "file": "IGS0OPSRAP_20262810000_01D_15M_ORB.SP3.gz",
+        "sha256": "11c51d405576a2a1055195c9df80263c361d61e42e298325f944addee61619cf"
+      },
+      {
+        "file": "IGS0OPSRAP_20262820000_01D_15M_ORB.SP3.gz",
+        "sha256": "f5a7a8af8887e56b7fbd8db244e2829643fdbebc3db036fa66e87245ce23169e"
+      },
+      {
+        "file": "IGS0OPSRAP_20262830000_01D_15M_ORB.SP3.gz",
+        "sha256": "68a56d1ec131063967c997fcdafbcefa0737106f6890ba1c10ed5b043d0849ba"
+      },
+      {
+        "file": "IGS0OPSRAP_20262840000_01D_15M_ORB.SP3.gz",
+        "sha256": "e9238e9d86dd55bd3acb903cdc5df6db0e9949aa1c789110412687ac65498d24"
+      },
+      {
+        "file": "IGS0OPSRAP_20262850000_01D_15M_ORB.SP3.gz",
+        "sha256": "2d17a4e5a31672bad14d03527cc45056942e0604f99dafdfadd5361564bf8388"
+      },
+      {
+        "file": "IGS0OPSRAP_20262860000_01D_15M_ORB.SP3.gz",
+        "sha256": "5d248a8e9b1b970a56d46db49d8c27f70eec2e3154045553c3ad090f189327d4"
+      },
+      {
+        "file": "IGS0OPSRAP_20262870000_01D_15M_ORB.SP3.gz",
+        "sha256": "11b63470d52c45b981bbf0e7f951c7b80a81ae5e563054962e004b8760aacb96"
+      }
+    ],
+    "limitations": [
+      "Retrospective clock-only study using observed Rapid products, not a live product-arrival replay.",
+      "Daily windows overlap; forecasts are not independent trials.",
+      "Clock errors do not measure receiver acquisition, orbital accuracy, sky visibility, or camera positioning.",
+      "No common clock offset or satellite outliers are removed."
+    ]
+  },
+  "orbit_study": {
+    "archive_sha256": "bc47c96c1a847196459301efb3a65d9803be69992be9d4b87153e8548fe0e0d5",
+    "orbit": {
+      "points": 10415,
+      "unit": "m",
+      "rms": 149410.36254885423,
+      "median_absolute": 14.398837251780792,
+      "maximum_absolute": 1398932.626242517
+    },
+    "clock": {
+      "points": 83328,
+      "unit": "ns",
+      "rms": 442.361341633823,
+      "median_absolute": 82.92182053601816,
+      "maximum_absolute": 2371.629095625997
+    },
+    "by_prn": [
+      {
+        "prn": 1,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 451358.94949106884,
+          "median_absolute": 373029.1291242704,
+          "maximum_absolute": 815767.4846681226
+        }
+      },
+      {
+        "prn": 2,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 66.11040528569552,
+          "median_absolute": 32.20406972987974,
+          "maximum_absolute": 159.32692645231927
+        }
+      },
+      {
+        "prn": 3,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 40.59928901566929,
+          "median_absolute": 23.412287910610935,
+          "maximum_absolute": 86.34823957002786
+        }
+      },
+      {
+        "prn": 4,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 6.794722811294277,
+          "median_absolute": 6.517687980683828,
+          "maximum_absolute": 11.014771825165846
+        }
+      },
+      {
+        "prn": 5,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 18.974521446674512,
+          "median_absolute": 7.595614597896805,
+          "maximum_absolute": 52.07061304787689
+        }
+      },
+      {
+        "prn": 6,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 17.817232429091792,
+          "median_absolute": 12.818517936578058,
+          "maximum_absolute": 37.686002521584506
+        }
+      },
+      {
+        "prn": 7,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 15.275743541951135,
+          "median_absolute": 16.022409113003523,
+          "maximum_absolute": 22.93829818366093
+        }
+      },
+      {
+        "prn": 8,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 15.213532982599121,
+          "median_absolute": 6.856111739614274,
+          "maximum_absolute": 39.02677299478596
+        }
+      },
+      {
+        "prn": 9,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 12.232871480300906,
+          "median_absolute": 8.468068858687655,
+          "maximum_absolute": 25.317435322747148
+        }
+      },
+      {
+        "prn": 10,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 33.32088219701509,
+          "median_absolute": 23.80232761333849,
+          "maximum_absolute": 68.17803485630658
+        }
+      },
+      {
+        "prn": 11,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 15.880904764794467,
+          "median_absolute": 4.844974815253635,
+          "maximum_absolute": 45.8665790977536
+        }
+      },
+      {
+        "prn": 12,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 164977.46669919047,
+          "median_absolute": 8.483199884638097,
+          "maximum_absolute": 687158.0265113913
+        }
+      },
+      {
+        "prn": 14,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 84.46464158999477,
+          "median_absolute": 41.06875182338817,
+          "maximum_absolute": 204.88928795763863
+        }
+      },
+      {
+        "prn": 15,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 365547.5794988058,
+          "median_absolute": 201945.49790581083,
+          "maximum_absolute": 778459.0621707556
+        }
+      },
+      {
+        "prn": 16,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 52.6778714103572,
+          "median_absolute": 24.838676287515156,
+          "maximum_absolute": 130.53031562755962
+        }
+      },
+      {
+        "prn": 17,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 39.570263821065204,
+          "median_absolute": 24.891342052459724,
+          "maximum_absolute": 93.07066710285625
+        }
+      },
+      {
+        "prn": 18,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 47.72332434510289,
+          "median_absolute": 22.310736448014772,
+          "maximum_absolute": 120.59717866414671
+        }
+      },
+      {
+        "prn": 19,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 45.52548568041722,
+          "median_absolute": 29.865038752009422,
+          "maximum_absolute": 104.5551592562341
+        }
+      },
+      {
+        "prn": 20,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 49.96802074733126,
+          "median_absolute": 22.165384013873243,
+          "maximum_absolute": 121.11165358466793
+        }
+      },
+      {
+        "prn": 21,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 16.835294129915983,
+          "median_absolute": 3.8051897460969726,
+          "maximum_absolute": 54.32560202817868
+        }
+      },
+      {
+        "prn": 22,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 60.87816655122636,
+          "median_absolute": 33.9473512894148,
+          "maximum_absolute": 137.40107893406784
+        }
+      },
+      {
+        "prn": 23,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 15.619801910411176,
+          "median_absolute": 4.921987268195593,
+          "maximum_absolute": 37.40711737610032
+        }
+      },
+      {
+        "prn": 24,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 76.30920679897159,
+          "median_absolute": 51.58889609843726,
+          "maximum_absolute": 160.35890884895213
+        }
+      },
+      {
+        "prn": 25,
+        "orbit": {
+          "points": 335,
+          "unit": "m",
+          "rms": 573036.1727470177,
+          "median_absolute": 16.712972318707557,
+          "maximum_absolute": 1398932.626242517
+        }
+      },
+      {
+        "prn": 26,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 76.41743901368082,
+          "median_absolute": 49.675433089620846,
+          "maximum_absolute": 158.62593283173612
+        }
+      },
+      {
+        "prn": 27,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 55.77886133503429,
+          "median_absolute": 32.94750449170254,
+          "maximum_absolute": 126.97323034534342
+        }
+      },
+      {
+        "prn": 28,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 22.261055992955733,
+          "median_absolute": 4.275738811519245,
+          "maximum_absolute": 88.30542449513558
+        }
+      },
+      {
+        "prn": 29,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 21.53575406783526,
+          "median_absolute": 10.114408506497568,
+          "maximum_absolute": 60.98189492411596
+        }
+      },
+      {
+        "prn": 30,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 6.617842969535359,
+          "median_absolute": 6.154149009659644,
+          "maximum_absolute": 11.029782328604583
+        }
+      },
+      {
+        "prn": 31,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 21.494351253826775,
+          "median_absolute": 10.501992262863304,
+          "maximum_absolute": 98.44685603550367
+        }
+      },
+      {
+        "prn": 32,
+        "orbit": {
+          "points": 336,
+          "unit": "m",
+          "rms": 47.30056425277832,
+          "median_absolute": 28.544510283208524,
+          "maximum_absolute": 108.26869308705054
+        }
+      }
+    ],
+    "earth_orientation_sha256": "bfa2066aab0400b075357f573af6081e0068a518993609eee0c5ca991bab0845",
+    "observations": [
+      {
+        "file": "IGS0OPSRAP_20261820000_01D_15M_ORB.SP3.gz",
+        "sha256": "e3f5e7ca6c677da3f432116ebfc20cd684ac69f559b613a0397e99aa18f34e43"
+      },
+      {
+        "file": "IGS0OPSRAP_20261830000_01D_15M_ORB.SP3.gz",
+        "sha256": "67d1f0132d7b31e6bb50f3ba6899646567f3d7cf9e28566735be7bb900c881d4"
+      },
+      {
+        "file": "IGS0OPSRAP_20261840000_01D_15M_ORB.SP3.gz",
+        "sha256": "6048b348bac006dc47d0e6b2ee7be790b7312f37e8d2be0727d75160976aae3a"
+      },
+      {
+        "file": "IGS0OPSRAP_20261850000_01D_15M_ORB.SP3.gz",
+        "sha256": "dc30a4befd2b201ae86abcf4ce29cd5efc36dd1ae30b20f115152d33e412ff6c"
+      },
+      {
+        "file": "IGS0OPSRAP_20261860000_01D_15M_ORB.SP3.gz",
+        "sha256": "164d2e5bf6f4297a6cd38de1c97a3b4c6303f696d9c524339586bc12fc5c8e57"
+      },
+      {
+        "file": "IGS0OPSRAP_20261870000_01D_15M_ORB.SP3.gz",
+        "sha256": "9149c7c23b0f2bbebceb74cc6ca58ba0387090a18c5658a00fa5436bef1bb7fc"
+      },
+      {
+        "file": "IGS0OPSRAP_20261880000_01D_15M_ORB.SP3.gz",
+        "sha256": "79d690a49f6db0f0286540d8874e164c693b4a96e01cf69e67551bb7ac54f413"
+      },
+      {
+        "file": "IGS0OPSRAP_20261890000_01D_15M_ORB.SP3.gz",
+        "sha256": "13bde3dd30a7325a8778d823abe74ff4a2e11cc0e883b6471351f123d445f7e7"
+      },
+      {
+        "file": "IGS0OPSRAP_20261900000_01D_15M_ORB.SP3.gz",
+        "sha256": "e1e2489e883396a0d3a7fcf7598523c664ca7094906ac09da41872e765cf6f34"
+      },
+      {
+        "file": "IGS0OPSRAP_20261910000_01D_15M_ORB.SP3.gz",
+        "sha256": "1e9efa9e11000116d6974f5d447bc83a2a006da3f152e1e14a866952aa4038fe"
+      },
+      {
+        "file": "IGS0OPSRAP_20261920000_01D_15M_ORB.SP3.gz",
+        "sha256": "f8d6387f31b17c43be70d8dfbf0012be700459dd4d1813960a409e9198dd389d"
+      },
+      {
+        "file": "IGS0OPSRAP_20261930000_01D_15M_ORB.SP3.gz",
+        "sha256": "108493ee030ff0e56e1573a64fa86bc5c8d6902d4159ecfc6981975f55b5d45b"
+      },
+      {
+        "file": "IGS0OPSRAP_20261940000_01D_15M_ORB.SP3.gz",
+        "sha256": "33c584f8ad84f55e0fca57f23a594b4f8dc49130c95fc9bb7ecdd0ba1f72ab44"
+      },
+      {
+        "file": "IGS0OPSRAP_20261950000_01D_15M_ORB.SP3.gz",
+        "sha256": "048441bcf9cd43438b61d1914ad4020ce18b5b35c37ebb7e5328ae9b93c6098b"
+      },
+      {
+        "file": "IGS0OPSRAP_20261960000_01D_15M_ORB.SP3.gz",
+        "sha256": "f2f2a129232ea743f5d452b11f30b5b683ebd7132db777bdb8130b6cf2781467"
+      },
+      {
+        "file": "IGS0OPSRAP_20261970000_01D_15M_ORB.SP3.gz",
+        "sha256": "bd2d782906f56dae3c58746daf8cff2fb06e46a2e14c6d090d17c005fe634e11"
+      },
+      {
+        "file": "IGS0OPSRAP_20261980000_01D_15M_ORB.SP3.gz",
+        "sha256": "807df00a953f193eabdbf7add0efdb8616978371ee52f331291faa3d5e563308"
+      },
+      {
+        "file": "IGS0OPSRAP_20261990000_01D_15M_ORB.SP3.gz",
+        "sha256": "331501488721c2583df6617ede5ddd9b3481990816405e6f4adbbe0630c43161"
+      },
+      {
+        "file": "IGS0OPSRAP_20262000000_01D_15M_ORB.SP3.gz",
+        "sha256": "b063df1cc0167bfb6a4b39e2ebaf776e94b13b139e8bd1686064f598cd1cc98a"
+      },
+      {
+        "file": "IGS0OPSRAP_20262010000_01D_15M_ORB.SP3.gz",
+        "sha256": "0cd8320d3b187a09603ee853a734d3ca2b24963b0f4d1a2a0f7eb23f5cc5db19"
+      },
+      {
+        "file": "IGS0OPSRAP_20262020000_01D_15M_ORB.SP3.gz",
+        "sha256": "092b24146fdca028ca1c4ae1d61fd948a80ed18ae3dd3c99c32c9fa642b156dd"
+      },
+      {
+        "file": "IGS0OPSRAP_20262030000_01D_15M_ORB.SP3.gz",
+        "sha256": "f6003b7d68b6da01d267532dffd9adde36597643306389f3d32d65cc606f2a44"
+      },
+      {
+        "file": "IGS0OPSRAP_20262040000_01D_15M_ORB.SP3.gz",
+        "sha256": "8000bc39efed56747b5d19f0d4eb70c57d405a4926ef08c10ff1e2fa1b81a007"
+      },
+      {
+        "file": "IGS0OPSRAP_20262050000_01D_15M_ORB.SP3.gz",
+        "sha256": "c9a7f0a81d350f35a5dc0c0ae7170f2543c76b5b2be8627a6a4b0fe4c599f9f8"
+      },
+      {
+        "file": "IGS0OPSRAP_20262060000_01D_15M_ORB.SP3.gz",
+        "sha256": "a5f1ddf33c3ab219751a9afc196742b578872e0c67fe9de1c400a229943a317a"
+      },
+      {
+        "file": "IGS0OPSRAP_20262070000_01D_15M_ORB.SP3.gz",
+        "sha256": "129710fe1aff61230061f13403de69c4f0936218edf6ad20a68169359f34a871"
+      },
+      {
+        "file": "IGS0OPSRAP_20262080000_01D_15M_ORB.SP3.gz",
+        "sha256": "7405044fde1382e6ec614af4b4701f0ec807ba9ba0d5c84bc48616bff0d1ad20"
+      },
+      {
+        "file": "IGS0OPSRAP_20262090000_01D_15M_ORB.SP3.gz",
+        "sha256": "453daeec2cf6ce7b792e700967f0344d9c7f8b0239f02a76e049e45d0df3ba39"
+      },
+      {
+        "file": "IGS0OPSRAP_20262100000_01D_15M_ORB.SP3.gz",
+        "sha256": "a4d7723389d0c65ef1af9f993cd7849f70a4f09c04881278eb3cd99e9f5dd0b9"
+      },
+      {
+        "file": "IGS0OPSRAP_20262110000_01D_15M_ORB.SP3.gz",
+        "sha256": "c32ecde7dbc866ff583ed0946f8ad12d55f4e378143f02d8f707762c29beafc8"
+      },
+      {
+        "file": "IGS0OPSRAP_20262120000_01D_15M_ORB.SP3.gz",
+        "sha256": "d0e38e2427e50bece0897c511f03bd47b07aeb84ad17d0c88784be3a11e5b738"
+      },
+      {
+        "file": "IGS0OPSRAP_20262130000_01D_15M_ORB.SP3.gz",
+        "sha256": "7ff7b241b1600de267d0d2836ce394cdd449068f30438b0b3943f1a39c975c88"
+      },
+      {
+        "file": "IGS0OPSRAP_20262140000_01D_15M_ORB.SP3.gz",
+        "sha256": "09308804be15499b15df38f55f4089e4de2559f1f8686a024a90c1c1f17f6573"
+      },
+      {
+        "file": "IGS0OPSRAP_20262150000_01D_15M_ORB.SP3.gz",
+        "sha256": "06e2f89bc274d9638af387e71421ef14199a55cd064acb71ef2eb93beaa7a662"
+      },
+      {
+        "file": "IGS0OPSRAP_20262160000_01D_15M_ORB.SP3.gz",
+        "sha256": "129123d2519f5d4a5118ed04a02046f83f5fd9be0caa64f6fcde248fbf7ea16c"
+      },
+      {
+        "file": "IGS0OPSRAP_20262170000_01D_15M_ORB.SP3.gz",
+        "sha256": "3da74f61fac5f489b66c08dfbf2b46c68fa8135a8307766678223fda9fa08aea"
+      },
+      {
+        "file": "IGS0OPSRAP_20262180000_01D_15M_ORB.SP3.gz",
+        "sha256": "901bccf22154c5975f87095d6b8aa1d8f9e265bb13072b64f14da9df1630ac8c"
+      },
+      {
+        "file": "IGS0OPSRAP_20262190000_01D_15M_ORB.SP3.gz",
+        "sha256": "5561762a8373e777df593b820b418801a7a36dc7db2221b5e028ec71dee73113"
+      },
+      {
+        "file": "IGS0OPSRAP_20262200000_01D_15M_ORB.SP3.gz",
+        "sha256": "768657a949a367ec6fccae6ac0c1ba8f668da59fa5e131a97df70d2c64446ef9"
+      },
+      {
+        "file": "IGS0OPSRAP_20262210000_01D_15M_ORB.SP3.gz",
+        "sha256": "b0ffb3cb6075ad03b1e0ff03d9778ffd0418cb8652dcbce213832dbaf1244e8d"
+      },
+      {
+        "file": "IGS0OPSRAP_20262220000_01D_15M_ORB.SP3.gz",
+        "sha256": "b21f51625dff56991052fe5dba7337ac3b715f5a5184d19ae1109b64d31998bf"
+      },
+      {
+        "file": "IGS0OPSRAP_20262230000_01D_15M_ORB.SP3.gz",
+        "sha256": "416c8e22b4bc9225d1b155864398eb7fd207019ae857a80c6ab82a7d52d27106"
+      },
+      {
+        "file": "IGS0OPSRAP_20262240000_01D_15M_ORB.SP3.gz",
+        "sha256": "f80c570cb96ad5ecbbc2ba96cc57034839bdcc37e4156f38b3d7db5fb0b0597e"
+      },
+      {
+        "file": "IGS0OPSRAP_20262250000_01D_15M_ORB.SP3.gz",
+        "sha256": "c07a20fcc3fbcba37d66045e3fcf45e5687f951b214dd6b5188c984bb27db939"
+      },
+      {
+        "file": "IGS0OPSRAP_20262260000_01D_15M_ORB.SP3.gz",
+        "sha256": "75af40d8d3502694e4ab50f3d7983980f8d0c569e3b0be4d64016b67e6919a83"
+      },
+      {
+        "file": "IGS0OPSRAP_20262270000_01D_15M_ORB.SP3.gz",
+        "sha256": "32cb95ddcdcea2b68d7e14f07cdbb2821f155f8b28eb679621a1d7f942769704"
+      },
+      {
+        "file": "IGS0OPSRAP_20262280000_01D_15M_ORB.SP3.gz",
+        "sha256": "33f3cf5fed2ae9e3e548b65103b55538e7304edfe11c800534ae8ecfd1433c56"
+      },
+      {
+        "file": "IGS0OPSRAP_20262290000_01D_15M_ORB.SP3.gz",
+        "sha256": "b806f8b74590d5840aa7ad700a7a37af282d541efd21f370ca2f28350e668934"
+      },
+      {
+        "file": "IGS0OPSRAP_20262300000_01D_15M_ORB.SP3.gz",
+        "sha256": "a11366c510e1160b6137e8b5c0ef3c7e48e5cc230a2a7fcd73d84b08b577d819"
+      },
+      {
+        "file": "IGS0OPSRAP_20262310000_01D_15M_ORB.SP3.gz",
+        "sha256": "c9814769c4e72975cab6cd1d60d85a59c7cf958fb3e0efddc5296a52a695e6c1"
+      },
+      {
+        "file": "IGS0OPSRAP_20262320000_01D_15M_ORB.SP3.gz",
+        "sha256": "f5f9e62d8fc2f2ad04318369c93ff1dbc76c48bc2dbb5df9b7e955c4ad8740a4"
+      },
+      {
+        "file": "IGS0OPSRAP_20262330000_01D_15M_ORB.SP3.gz",
+        "sha256": "2f20664de756548c57b82f7196ef85db5f5a1c71ca4547f74ce1336a8c959a52"
+      },
+      {
+        "file": "IGS0OPSRAP_20262340000_01D_15M_ORB.SP3.gz",
+        "sha256": "69e1b2300f4ad0adad53dab35dbd472f94c86128e25be07235c838014cf637c5"
+      },
+      {
+        "file": "IGS0OPSRAP_20262350000_01D_15M_ORB.SP3.gz",
+        "sha256": "1a734a7d6fb42c89d2d5d08517fb74660e342cefc7afae5dbbcfce1ca0f933ec"
+      },
+      {
+        "file": "IGS0OPSRAP_20262360000_01D_15M_ORB.SP3.gz",
+        "sha256": "842df77b886efcf71017ca1a2fb9d026b34b25bab82944222752a02d963403ed"
+      },
+      {
+        "file": "IGS0OPSRAP_20262370000_01D_15M_ORB.SP3.gz",
+        "sha256": "3b020296da9f88b3748e98edf87c62441c0fa299730461d1daebd24d852e8e62"
+      },
+      {
+        "file": "IGS0OPSRAP_20262380000_01D_15M_ORB.SP3.gz",
+        "sha256": "f7464b877d23d322d398e1c9ff8ef4e4e9dd6c5d60503ce8055f943614044ede"
+      },
+      {
+        "file": "IGS0OPSRAP_20262390000_01D_15M_ORB.SP3.gz",
+        "sha256": "8e641485f3365c76a3fd293352e2887870027e4a5cd24dad453213f194eca758"
+      },
+      {
+        "file": "IGS0OPSRAP_20262400000_01D_15M_ORB.SP3.gz",
+        "sha256": "40cef3fefd824bf20da59a9a6d26384f888902b8b9f163c83334a060a9ca9144"
+      },
+      {
+        "file": "IGS0OPSRAP_20262410000_01D_15M_ORB.SP3.gz",
+        "sha256": "ecc49e67a50f5db62dfa79409a28308db294ea6cedc17ca8f8b8e81c93961970"
+      },
+      {
+        "file": "IGS0OPSRAP_20262420000_01D_15M_ORB.SP3.gz",
+        "sha256": "d752130dbcb3c7569945c10ab05f1602aa4a6aa7fab42f81e38108d5bcbd0925"
+      },
+      {
+        "file": "IGS0OPSRAP_20262430000_01D_15M_ORB.SP3.gz",
+        "sha256": "1e74a65849037d2b4dda230e5d0da3fb07edd404a3eea381b7ff3c5afc143e6f"
+      },
+      {
+        "file": "IGS0OPSRAP_20262440000_01D_15M_ORB.SP3.gz",
+        "sha256": "9e7f4da27bc5e25ee9a96210d69f383de766140c0df62e733c5006dc6186f9eb"
+      },
+      {
+        "file": "IGS0OPSRAP_20262450000_01D_15M_ORB.SP3.gz",
+        "sha256": "645e05fc4fc7fb4279e21a200312ac2fdb415093173a56c637b7d76e7294112b"
+      },
+      {
+        "file": "IGS0OPSRAP_20262460000_01D_15M_ORB.SP3.gz",
+        "sha256": "03be793d7ee12dbd5025970486e6a47b2c820cfe8b85eeb2ac80234a77f48658"
+      },
+      {
+        "file": "IGS0OPSRAP_20262470000_01D_15M_ORB.SP3.gz",
+        "sha256": "9606d48f2c9ce235a46116292912e90e24a7f472c3b541bd810ad793290a9eed"
+      },
+      {
+        "file": "IGS0OPSRAP_20262480000_01D_15M_ORB.SP3.gz",
+        "sha256": "371100dd76c6506187a957444080f4ea7ae63decae0fc17c42f5406a5900b62e"
+      },
+      {
+        "file": "IGS0OPSRAP_20262490000_01D_15M_ORB.SP3.gz",
+        "sha256": "d7fec99718c6151098a014e8bf3c31fcde0bea5244a3cf9c2c3e662a80042551"
+      },
+      {
+        "file": "IGS0OPSRAP_20262500000_01D_15M_ORB.SP3.gz",
+        "sha256": "9a163863e222599ac511fd923670d2e342d157ef2360aa7ff2ae298dcd69d485"
+      },
+      {
+        "file": "IGS0OPSRAP_20262510000_01D_15M_ORB.SP3.gz",
+        "sha256": "221b23b3052f98a20e2dbe7b11da1e01f02990ac7292e3cb43201ff3dcc27b43"
+      },
+      {
+        "file": "IGS0OPSRAP_20262520000_01D_15M_ORB.SP3.gz",
+        "sha256": "a3a43b298cb08a743a680813c97a9d7955b395354ad3c20aea9fb7a4ce2049c5"
+      },
+      {
+        "file": "IGS0OPSRAP_20262530000_01D_15M_ORB.SP3.gz",
+        "sha256": "8e2b5f027d590f76dd6a774b1b9aed93053d9fb74d71849f0fab47287f65181d"
+      },
+      {
+        "file": "IGS0OPSRAP_20262540000_01D_15M_ORB.SP3.gz",
+        "sha256": "5234d486417ae21f2c2a80d76469e549cc8066aefb0d36a16ca2507bcd0e8cf2"
+      },
+      {
+        "file": "IGS0OPSRAP_20262550000_01D_15M_ORB.SP3.gz",
+        "sha256": "393bc63a26657f4e01b675b96d5a2e16a5f8742919e7024e87b0968232d8980c"
+      },
+      {
+        "file": "IGS0OPSRAP_20262560000_01D_15M_ORB.SP3.gz",
+        "sha256": "632b6f182463abf4fb48d231af44de68362dec4e9b6386816db5159d8102b745"
+      },
+      {
+        "file": "IGS0OPSRAP_20262570000_01D_15M_ORB.SP3.gz",
+        "sha256": "2e08d9157eec125205513158bca0bc3c3cbb0986533d729032402d7c4c5b714d"
+      },
+      {
+        "file": "IGS0OPSRAP_20262580000_01D_15M_ORB.SP3.gz",
+        "sha256": "2658920c825af93590b373459b7104065340827335626f1ce19a37ba6c9d15af"
+      },
+      {
+        "file": "IGS0OPSRAP_20262590000_01D_15M_ORB.SP3.gz",
+        "sha256": "83b749eb93958d61a6c1717f7011c10d03913b050a6cdce5b74c7fec40fae91a"
+      },
+      {
+        "file": "IGS0OPSRAP_20262600000_01D_15M_ORB.SP3.gz",
+        "sha256": "31619e2d2f1a9c7c06eb4604e907adfe561f00c43f66820e40e93faef709469f"
+      },
+      {
+        "file": "IGS0OPSRAP_20262610000_01D_15M_ORB.SP3.gz",
+        "sha256": "9227f3bd865452aa0584fd0e93ae2d7447421b80151ace0ece37e02d54e7a64b"
+      },
+      {
+        "file": "IGS0OPSRAP_20262620000_01D_15M_ORB.SP3.gz",
+        "sha256": "b78746ff66cad31b6c6a46ebd1ec10679f35f534624b372837bdec49136187ad"
+      },
+      {
+        "file": "IGS0OPSRAP_20262630000_01D_15M_ORB.SP3.gz",
+        "sha256": "3ad9b1af10c7c0f406b2ca1f6266350b35612bcede9bb259b5a6747fbababda1"
+      },
+      {
+        "file": "IGS0OPSRAP_20262640000_01D_15M_ORB.SP3.gz",
+        "sha256": "ad7dd776a4356c68adc5a433485cfec213d335f3c4b25f2c37422ecfb57551bb"
+      },
+      {
+        "file": "IGS0OPSRAP_20262650000_01D_15M_ORB.SP3.gz",
+        "sha256": "884981e48422a30c6502008e6d80f5b949cbd75c4ada562d2c9241d4d084b498"
+      },
+      {
+        "file": "IGS0OPSRAP_20262660000_01D_15M_ORB.SP3.gz",
+        "sha256": "f77be74d113d9c9b9c47ce72425d0405ab121f1b7e1a5d4565e911665979520c"
+      },
+      {
+        "file": "IGS0OPSRAP_20262670000_01D_15M_ORB.SP3.gz",
+        "sha256": "9d6c732ff7be45ab1c74a5ea295ce8380a3263b3b433df58e6492f5e3ce39f77"
+      },
+      {
+        "file": "IGS0OPSRAP_20262680000_01D_15M_ORB.SP3.gz",
+        "sha256": "71e19b09de123c944e39c09d5de6060d0b5b4c08ca7c88cad962bf81ad6df3ff"
+      },
+      {
+        "file": "IGS0OPSRAP_20262690000_01D_15M_ORB.SP3.gz",
+        "sha256": "b4d3f68bdb985599595fca452422e31b0cb7d6d8da41103fd567dcb5ac3cbd63"
+      },
+      {
+        "file": "IGS0OPSRAP_20262700000_01D_15M_ORB.SP3.gz",
+        "sha256": "6437b9c10d4ad4c0cf8f17b22bbe2fc978c3b655603265722fd5213d0d4c272f"
+      },
+      {
+        "file": "IGS0OPSRAP_20262710000_01D_15M_ORB.SP3.gz",
+        "sha256": "ca993f8af1ec8308236a15808287a24c4dd7d58df933e35de0307d50164206e1"
+      },
+      {
+        "file": "IGS0OPSRAP_20262720000_01D_15M_ORB.SP3.gz",
+        "sha256": "eb30bc552dcfe7665f53d8cecf593d8cae14a3bf569688f6896ced58e702f871"
+      },
+      {
+        "file": "IGS0OPSRAP_20262730000_01D_15M_ORB.SP3.gz",
+        "sha256": "651453f3a3269e46ce57431ccf22e7b2242d09f00b8d266734f4409ea4e553fa"
+      },
+      {
+        "file": "IGS0OPSRAP_20262740000_01D_15M_ORB.SP3.gz",
+        "sha256": "40306ac09a1f211c3031d41871ddd671a86910a92f0a96fd6977264dcb2bca14"
+      },
+      {
+        "file": "IGS0OPSRAP_20262750000_01D_15M_ORB.SP3.gz",
+        "sha256": "3ba38ed6388518e4a48e41524d7f1fef5728a0254b570ed9ca9848fb2579d6af"
+      },
+      {
+        "file": "IGS0OPSRAP_20262760000_01D_15M_ORB.SP3.gz",
+        "sha256": "89f4ff3cc7e0713c47f29bbcbe3af5a1f079b51334ea725566c870fb2dbaa470"
+      },
+      {
+        "file": "IGS0OPSRAP_20262770000_01D_15M_ORB.SP3.gz",
+        "sha256": "ca064777f32d29e7eb9c5159792a99edeffa5d84542619d968b55bd0b8076192"
+      },
+      {
+        "file": "IGS0OPSRAP_20262780000_01D_15M_ORB.SP3.gz",
+        "sha256": "844d9846870b214768dd6d1be4f70236e6dc9ee8c97a22ca3da6502a3ae596b6"
+      },
+      {
+        "file": "IGS0OPSRAP_20262790000_01D_15M_ORB.SP3.gz",
+        "sha256": "0355045400c361fdd3c5498c6033c02d4e0d36a7a2eb873ff284a03ec63c9697"
+      },
+      {
+        "file": "IGS0OPSRAP_20262800000_01D_15M_ORB.SP3.gz",
+        "sha256": "09f0e081b187f3ce9f0f4796075bef6c4ae574afe5a5b3179ad97438fbf7e5bd"
+      },
+      {
+        "file": "IGS0OPSRAP_20262810000_01D_15M_ORB.SP3.gz",
+        "sha256": "11c51d405576a2a1055195c9df80263c361d61e42e298325f944addee61619cf"
+      },
+      {
+        "file": "IGS0OPSRAP_20262820000_01D_15M_ORB.SP3.gz",
+        "sha256": "f5a7a8af8887e56b7fbd8db244e2829643fdbebc3db036fa66e87245ce23169e"
+      },
+      {
+        "file": "IGS0OPSRAP_20262830000_01D_15M_ORB.SP3.gz",
+        "sha256": "68a56d1ec131063967c997fcdafbcefa0737106f6890ba1c10ed5b043d0849ba"
+      },
+      {
+        "file": "IGS0OPSRAP_20262840000_01D_15M_ORB.SP3.gz",
+        "sha256": "e9238e9d86dd55bd3acb903cdc5df6db0e9949aa1c789110412687ac65498d24"
+      },
+      {
+        "file": "IGS0OPSRAP_20262850000_01D_15M_ORB.SP3.gz",
+        "sha256": "2d17a4e5a31672bad14d03527cc45056942e0604f99dafdfadd5361564bf8388"
+      },
+      {
+        "file": "IGS0OPSRAP_20262860000_01D_15M_ORB.SP3.gz",
+        "sha256": "5d248a8e9b1b970a56d46db49d8c27f70eec2e3154045553c3ad090f189327d4"
+      },
+      {
+        "file": "IGS0OPSRAP_20262870000_01D_15M_ORB.SP3.gz",
+        "sha256": "11b63470d52c45b981bbf0e7f951c7b80a81ae5e563054962e004b8760aacb96"
+      }
+    ],
+    "predicted_sp3_samples_used": false,
+    "limitation": "This verifies decoded physical quantities against independent observations, not receiver interpolation or hardware acceptance."
+  },
+  "maneuver_context": [
+    {
+      "prn": 1,
+      "notice": "2026073",
+      "issued": "2026-09-11",
+      "maneuver": "2026-09-18",
+      "known_at_cutoff": true
+    },
+    {
+      "prn": 15,
+      "notice": "2026076",
+      "issued": "2026-09-18",
+      "maneuver": "2026-09-24/25",
+      "known_at_cutoff": false
+    },
+    {
+      "prn": 25,
+      "notice": "2026077",
+      "issued": "2026-09-24",
+      "maneuver": "2026-09-29/30",
+      "known_at_cutoff": false
+    },
+    {
+      "prn": 12,
+      "notice": "2026083",
+      "issued": "2026-10-02",
+      "maneuver": "2026-10-08/09",
+      "known_at_cutoff": false
+    }
+  ],
+  "orbit_study_context": {
+    "cutoff_gps": "2026-09-16T00:00:00",
+    "forecast_days": 28,
+    "raw_satellites": 31,
+    "health_guard_applied": false,
+    "explanation": "Raw full-span scores retain all maneuvering satellites. Announced outages are excluded operationally; unannounced future maneuvers cannot be extrapolated.",
+    "comparison_script_sha256": "46912eee138945815b7039f49f819beec35d2f40ba04c2a6c786481b44a9e27a",
+    "clock_scoring_window": "Only orbit start through exclusive 28-day end; the two-day clock reference look-back is not scored."
+  },
+  "limitations": [
+    "Matching sample structure and duration does not establish vendor-quality predictions or receiver acquisition performance.",
+    "Camera validation checks upload acceptance, not receiver interpolation or ancillary timing.",
+    "Outdoor acquisition has not been measured in a controlled comparison; no camera position-accuracy guarantee."
+  ],
+  "hardware_commit": {
+    "committed_at": "2026-10-25T03:00:16.812447909Z",
+    "end_gps": "2026-11-21T18:00:00",
+    "session_closed": true,
+    "sha256": "3bf9dcbc2b51d6cad01f6273440f794d66b9046194f0261eb23afef0464bbf96",
+    "bytes": 262144,
+    "excluded_prns": [
+      5,
+      8,
+      12,
+      15,
+      18
+    ],
+    "satellites": 27,
+    "limitation": "Acknowledged commit; not receiver acquisition or file readback."
+  }
+}

@@ -418,6 +418,98 @@ impl Snapshot {
     }
 }
 
+fn satellite_health(
+    prn: usize,
+    training: f64,
+    end: f64,
+    state: &Snapshot,
+    outages: &[Outage],
+    reviews: &[Notice],
+    now: f64,
+) -> Result<(bool, Vec<Value>)> {
+    let fresh = state
+        .latest_observed_by_prn
+        .get(&prn.to_string())
+        .is_some_and(|t| (0. ..=36. * 3600.).contains(&(now - t)));
+    let mut flags = Vec::new();
+    for e in outages {
+        if e.prn == prn && e.stop_gps.is_none_or(|stop| training <= stop) && end > e.start_gps {
+            let mut flag = serde_json::to_value(e)?;
+            flag["reason"] = json!("Official outage intersects or follows fitted arc");
+            flags.push(flag);
+        }
+    }
+    for e in &state.orbit_events {
+        if e.prn == prn && e.first_gps <= now && e.last_gps >= training && end > e.first_gps {
+            let mut flag = serde_json::to_value(e)?;
+            flag["reason"] = json!("Observed discontinuity requires a new clean fit");
+            flags.push(flag);
+        }
+    }
+    for n in reviews {
+        if training <= n.issued_gps
+            && n.issued_gps <= now
+            && (n.mentioned_prns.is_empty() || n.mentioned_prns.contains(&prn))
+        {
+            flags.push(json!({"prn":prn,"number":n.number,"reason":"Recent unstructured advisory needs interpretation"}));
+        }
+    }
+    Ok((fresh, flags))
+}
+
+/// Apply satellite health directly over a state-vector archive's actual span.
+/// This does not inherit another camera format's clock or encoding exclusions.
+pub fn guard_prns(
+    prns: &[u16],
+    training: f64,
+    start: f64,
+    end: f64,
+    state: &Snapshot,
+    now: f64,
+) -> Result<(BTreeSet<u16>, Value)> {
+    ensure!(
+        training.is_finite()
+            && training < start
+            && now.is_finite()
+            && start.is_finite()
+            && end.is_finite()
+            && end > start,
+        "Invalid satellite-health time window"
+    );
+    let mut failures = state.failures(now);
+    if !(start..end).contains(&now) {
+        failures.push("Predictions are outside their validity window".into());
+    }
+    let (outages, reviews) = match resolve(&state.notices, now) {
+        Ok(value) => value,
+        Err(error) => {
+            failures.push(format!("Health policy could not be resolved: {error:#}"));
+            (Vec::new(), Vec::new())
+        }
+    };
+    let mut retained = BTreeSet::new();
+    let mut flags = Vec::new();
+    let mut removed = Vec::new();
+    for &prn in prns {
+        ensure!((1..=32).contains(&prn), "Invalid GPS PRN");
+        let (fresh, local_flags) =
+            satellite_health(prn as usize, training, end, state, &outages, &reviews, now)?;
+        if failures.is_empty() && fresh && local_flags.is_empty() {
+            retained.insert(prn);
+        } else {
+            removed.push(json!({"prn":prn,"stale_observations":!fresh}));
+        }
+        flags.extend(local_flags);
+    }
+    if retained.len() < 4 {
+        failures.push("Fewer than four usable GPS satellites".into());
+    }
+    let report = json!({"upload_allowed":failures.is_empty(),"checked_at_gps":now,
+        "failures":failures,"quality_flags":flags,"removed_records":removed,
+        "rule":"Fresh observations and clean orbit training; exclude official outages across the complete archive validity"});
+    Ok((retained, report))
+}
+
 pub fn guard(bytes: &[u8], training: f64, state: &Snapshot, now: f64) -> Result<(Vec<u8>, Value)> {
     validation::validate(bytes)?;
     let start = validation::start(bytes)?;
@@ -445,46 +537,10 @@ pub fn guard(bytes: &[u8], training: f64, state: &Snapshot, now: f64) -> Result<
         for prn in 1..=32 {
             let pos = week * validation::BLOCK + 6 + (prn - 1) * validation::RECORD;
             let mut record = bytes[pos..pos + validation::RECORD].to_vec();
-            let fresh = state
-                .latest_observed_by_prn
-                .get(&prn.to_string())
-                .is_some_and(|t| (0. ..=36. * 3600.).contains(&(now - t)));
-            let mut unsafe_record = false;
-            for e in &outages {
-                if e.prn == prn
-                    && e.stop_gps.is_none_or(|stop| training <= stop)
-                    && end > e.start_gps
-                {
-                    unsafe_record = true;
-                    {
-                        let mut flag = serde_json::to_value(e)?;
-                        flag["reason"] = json!("Official outage intersects or follows fitted arc");
-                        flags.push(flag);
-                    }
-                }
-            }
-            for e in &state.orbit_events {
-                if e.prn == prn && e.first_gps <= now && e.last_gps >= training && end > e.first_gps
-                {
-                    unsafe_record = true;
-                    {
-                        let mut flag = serde_json::to_value(e)?;
-                        flag["reason"] = json!("Observed discontinuity requires a new clean fit");
-                        flags.push(flag);
-                    }
-                }
-            }
-            for n in &reviews {
-                if training <= n.issued_gps
-                    && n.issued_gps <= now
-                    && (n.mentioned_prns.is_empty() || n.mentioned_prns.contains(&prn))
-                {
-                    unsafe_record = true;
-                    {
-                        flags.push(json!({"prn":prn,"number":n.number,"reason":"Recent unstructured advisory needs interpretation"}));
-                    }
-                }
-            }
+            let (fresh, local_flags) =
+                satellite_health(prn, training, end, state, &outages, &reviews, now)?;
+            let unsafe_record = !local_flags.is_empty();
+            flags.extend(local_flags);
             if record[1] == 0 && (!failures.is_empty() || !fresh || unsafe_record) {
                 record = cep::unavailable();
                 removals.push(json!({"week":week+1,"prn":prn,"stale_observations":!fresh}));

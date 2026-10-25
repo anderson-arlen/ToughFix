@@ -3,16 +3,17 @@
 **Fresh GPS assistance for Olympus Tough cameras, automatically, on Linux.**
 
 ToughFix downloads public GPS satellite observations, calculates its own
-14-day orbit and clock predictions, and updates your camera when you plug it
+orbit and clock predictions (14 days for TG-1, 28 days for TG-6), and updates your camera when you plug it
 in. A window and system tray show camera status, prediction freshness, and
 upload progress. The app and installer are written in Rust; neither Olympus's
 updater nor any outside prediction service is needed.
 
 TG-1 and TG-6 GPS updates are supported. TG-6 native independent generation,
 live satellite-health checks, and USB upload were tested on firmware 1.00.
-The camera accepted the generated file, and the owner reported an outdoor
-GPS fix in roughly five seconds afterward. Acquisition improvement still needs
-a controlled comparison. See the [TG-6 validation record](docs/tg6-format.md#native-integration-and-hardware-validation).
+The camera accepted generated files. Outdoor reports include an early fix in
+roughly five seconds and a later hike with very few geotagged photos.
+Reliable acquisition improvement has not been established. See the
+[TG-6 validation record](docs/tg6-format.md#native-integration-and-hardware-validation).
 
 The Olympus Stylus Tough-8010 is also supported for battery, firmware, and
 storage status. It has no GPS receiver and receives no assistance updates.
@@ -144,7 +145,7 @@ camera writes. Each USB connection permits at most one automatic upload;
 subsequent refreshes leave mounted storage alone.
 
 **Update GPS now** checks the latest satellite inputs and updates the connected
-TG-1 regardless of the interval, useful before a trip. It briefly unmounts storage
+camera regardless of the interval, useful before a trip. It briefly unmounts storage
 and restores it afterward; busy storage is retried every 30 seconds. If the camera already has
 the latest file, no flash write is needed. The adjacent refresh icon updates only
 local satellite data and predictions. **Upload again** in Advanced explicitly
@@ -235,8 +236,8 @@ across restarts, and stops the current archive download at the first failure.
 flowchart TD
     O["NOAA / IGS observed GPS positions and clocks"] --> F["Fit a model to three days of past observations"]
     E["IERS / USNO Earth orientation + NGA gravity"] --> F
-    F --> P["Propagate satellite orbits and clocks for 14 days"]
-    P --> C["Fit six-hour ephemerides and encode CEP"]
+    F --> P["Propagate satellite orbits and clocks for 28 days"]
+    P --> C["Encode TG-1 two-week ephemerides / TG-6 four-week state vectors"]
     C --> V["Decode independently; check ranges, CRCs and numerical agreement"]
     N["NAVCEN notices + observed orbit changes"] --> H["Exclude unsafe satellite weeks"]
     V --> H
@@ -281,19 +282,21 @@ select or fit either the orbit or clock model.
 
 The TG-6 receives a separately fitted linear clock model, matching its offset
 and drift fields. A TG-1 quadratic selection does not exclude that satellite.
-The TG-6 fit must pass the existing source-quality checks and a held-out
-past-day RMS limit of 50 ns. A separate historical test fits three days ending
-14 days before the current cutoff and predicts the following full fortnight;
-the observed clock errors must stay within 50 ns RMS and 150 ns maximum.
-That test requires 17 days of observations. Older daily Rapid products are
-downloaded once and verified from cache thereafter. These are quality
-heuristics based on past observations, not guarantees about future error.
-Current data, historical scores, source hashes, and rejection reasons are
-retained in the diagnostics. TG-6 clock fallbacks expand its own satellite-health
-check to include their training interval.
-An [audit across 106 days of observations](docs/tg6-accuracy.md#does-past-clock-prediction-error-predict-the-next-forecast-2026-10-16)
-finds that earlier failures strongly predict fourteen-day errors, while almost
-all still meet the same error limits over the following one to three days.
+The TG-6 fit must pass recent observed-fit, residual-step and held-out past-day
+checks, each limited to 50 ns. A recent Rapid fit is preferred when newer clocks
+fail relative residual checks; without a fallback, the same absolute limits
+apply. Historical fortnight errors are diagnostic and no longer remove useful
+current assistance. Only seven recent daily Rapid products are required;
+older cached observations can supply the optional historical scores.
+
+TG-6 records contain 336 two-hour states covering 28 days, matching the
+preserved official sample. Satellite eligibility is independent of TG-1's
+clock and polynomial constraints. Fresh observations, clean orbit fits and
+official outage checks across all four weeks still apply. The dashboard shows
+the satellite count. A [four-week validation study](docs/tg6-accuracy.md#four-week-coverage-2026-10-24)
+records the coverage gain and increasing long-range errors. Matching the sample's
+layout and duration does not establish vendor prediction quality or receiver
+acquisition performance.
 
 Clock inputs have a separate quality decision for each satellite. A newer
 observed clock fit is accepted when its residual RMS is at most
@@ -451,8 +454,8 @@ Other Tough models and GPS chipsets may use different formats or protocols.
 
 The **TG-6**, tested with firmware 1.00, uses selector-3 state-vector files.
 The native app generates its file from the same independent orbital fit and
-routes the correct format to the connected model. A 256-KiB generated file
-with 17 health-cleared satellites was accepted and committed by the camera.
+routes the correct format to the connected model. A 256-KiB four-week file
+with 27 health-cleared satellites was accepted and committed by the camera.
 [Format findings and validation limits](docs/tg6-format.md) describe the
 remaining receiver verification; no OM prediction feed is used at runtime.
 The [recent accuracy comparison](docs/tg6-accuracy.md) finds lower errors for

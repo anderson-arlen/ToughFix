@@ -136,7 +136,9 @@ fn fingerprint(observed: &data::Observations, cache: &Path, cutoff: f64) -> Resu
     bytes.extend(fs::read(cache.join("egm96.zip"))?);
     bytes.extend(fs::read(cache.join("finals2000A.all"))?);
     // Bump this whenever fit/encoding policy changes to invalidate old cached fits.
-    bytes.extend_from_slice(b"toughfix-native-engine-v5-tg6-validated-linear-clocks");
+    bytes.extend_from_slice(
+        b"toughfix-native-engine-v6-tg6-four-week-coverage-two-day-clock-reference",
+    );
     Ok(crate::camera::hash(&bytes))
 }
 
@@ -237,8 +239,7 @@ pub(super) fn publish(
                 .as_str()
                 .context("Missing TG-6 clock/orbit training epoch")?,
         )?;
-        let (tg6_base, tg6_health) = health::guard(&guarded, tg6_training, snapshot, now)?;
-        let (bytes, guard) = tg6::guard(&bytes, &tg6_base, &tg6_health)?;
+        let (bytes, guard) = tg6::guard(&bytes, tg6_training, snapshot, now)?;
         let hash = crate::camera::hash(&bytes);
         let archive_name = format!("{hash}.cep");
         let path = root.join("archives").join(&archive_name);
@@ -251,7 +252,7 @@ pub(super) fn publish(
             files::atomic(&path, &bytes)?;
         }
         Ok(
-            json!({"engine_version":1,"archive":archive_name,"metrics":meta,"guard":guard,
+            json!({"engine_version":2,"archive":archive_name,"metrics":meta,"guard":guard,
                   "base_sha256":pointer["guard"]["output_sha256"]}),
         )
     })();
@@ -263,7 +264,9 @@ pub(super) fn publish(
     files::json(&root.join("current.json"), &pointer)?;
     progress(Progress::new(
         RefreshStage::Validating,
-        if pointer["guard"]["upload_allowed"] == true {
+        if pointer["guard"]["upload_allowed"] == true
+            || pointer["tg6"]["guard"]["upload_allowed"] == true
+        {
             "Validated predictions are ready"
         } else {
             "Predictions published, but satellite health blocks uploading"
@@ -311,18 +314,30 @@ pub fn preflight(state: &Path) -> Result<(Vec<u8>, Value)> {
     Ok((bytes, pointer))
 }
 pub fn preflight_for(state: &Path, model: CameraModel) -> Result<(Vec<u8>, Value)> {
-    let (base, pointer) = preflight(state)?;
     if model != CameraModel::Tg6 {
-        return Ok((base, pointer));
+        return preflight(state);
     }
+    let status: Value = serde_json::from_slice(&fs::read(root(state).join("status.json"))?)?;
+    ensure!(
+        status["refresh_ok"] == true,
+        "Latest prediction refresh failed; retry before uploading"
+    );
+    let pointer = current(state)?;
+    let base = archive(state, &pointer)?;
     let p = &pointer["tg6"];
     ensure!(
-        p["engine_version"] == 1
+        p["engine_version"] == 2
             && p["guard"]["upload_allowed"] == true
-            && p["base_sha256"] == pointer["guard"]["output_sha256"],
+            && p["base_sha256"] == pointer["guard"]["output_sha256"]
+            && pointer["guard"]["output_sha256"].as_str()
+                == Some(crate::camera::hash(&base).as_str()),
         "TG-6 prediction is not eligible for upload"
     );
     let bytes = archive(state, p)?;
+    ensure!(
+        tg6::Archive::decode(&bytes)?.start() == validation::start(&base)?,
+        "TG-6/native forecast epochs differ"
+    );
     ensure!(
         bytes.len() == tg6::CAPACITY,
         "TG-6 prediction has the wrong transfer size"
@@ -336,8 +351,12 @@ pub fn preflight_for(state: &Path, model: CameraModel) -> Result<(Vec<u8>, Value
     )?;
     let snapshot: Snapshot =
         serde_json::from_slice(&fs::read(root(state).join("data/health-state.json"))?)?;
-    let (base, base_health) = health::guard(&base, training, &snapshot, health::now()?)?;
-    let (guarded, report) = tg6::guard(&bytes, &base, &base_health)?;
+    let now = health::now()?;
+    ensure!(
+        (0. ..=3600.).contains(&(now - snapshot.checked_at_gps)),
+        "Satellite health needs refreshing before upload"
+    );
+    let (guarded, report) = tg6::guard(&bytes, training, &snapshot, now)?;
     ensure!(
         guarded == bytes
             && report["upload_allowed"] == true
@@ -482,15 +501,16 @@ mod tests {
         let mut r = a.records[0].clone();
         r.state_epoch = (start / 900. + 44244. * 96.) as u32;
         r.clock_epoch = r.state_epoch;
-        r.states = vec![r.states[0]; 168];
+        r.states = vec![r.states[0]; tg6::STATE_COUNT];
         a.records = (1..=6)
             .map(|prn| tg6::Record { prn, ..r.clone() })
             .collect();
         a.padded_size = tg6::CAPACITY;
         let (bytes, guard) = tg6::guard(
             &a.encode().unwrap(),
-            &base,
-            &json!({"upload_allowed":true,"failures":[]}),
+            start - 3. * data::DAY,
+            &snapshot,
+            snapshot.checked_at_gps,
         )
         .unwrap();
         let hash = crate::camera::hash(&bytes);
@@ -500,7 +520,7 @@ mod tests {
         )
         .unwrap();
         let mut pointer = current(temp.path()).unwrap();
-        pointer["tg6"] = json!({"engine_version":1,"archive":format!("{hash}.cep"),"metrics":{},"guard":guard,"base_sha256":pointer["guard"]["output_sha256"]});
+        pointer["tg6"] = json!({"engine_version":2,"archive":format!("{hash}.cep"),"metrics":{},"guard":guard,"base_sha256":pointer["guard"]["output_sha256"]});
         files::json(&root(temp.path()).join("current.json"), &pointer).unwrap();
         assert_eq!(
             preflight_for(temp.path(), CameraModel::Tg1).unwrap().0,
@@ -534,6 +554,54 @@ mod tests {
         files::json(&root(temp.path()).join("current.json"), &pointer).unwrap();
         assert!(preflight_for(temp.path(), CameraModel::Tg6).is_err());
         assert!(preflight_for(temp.path(), CameraModel::Tg1).is_ok());
+    }
+
+    #[test]
+    fn tg6_preflight_uses_all_four_weeks_without_requiring_an_unexpired_tg1_file() {
+        let temp = Temp::new();
+        let (base, snapshot) = seed(temp.path());
+        let now = snapshot.checked_at_gps;
+        let start = (now / 900.).floor() * 900. - 20. * data::DAY;
+        let weeks: Vec<_> = (0..4)
+            .map(|w| {
+                (0..32)
+                    .map(|p| {
+                        let pos = w * validation::BLOCK + 6 + p * validation::RECORD;
+                        base[pos..pos + validation::RECORD].to_vec()
+                    })
+                    .collect()
+            })
+            .collect();
+        let base = cep::archive(start, &weeks).unwrap();
+        let hash = crate::camera::hash(&base);
+        files::atomic(
+            &root(temp.path()).join(format!("archives/{hash}.cep")),
+            &base,
+        )
+        .unwrap();
+        let bytes = tg6::tests::candidate(start);
+        let (bytes, guard) = tg6::guard(&bytes, start - 3. * data::DAY, &snapshot, now).unwrap();
+        let tg6_hash = crate::camera::hash(&bytes);
+        files::atomic(
+            &root(temp.path()).join(format!("archives/{tg6_hash}.cep")),
+            &bytes,
+        )
+        .unwrap();
+        let pointer = json!({"engine_version":1,"archive":format!("{hash}.cep"),
+            "metrics":{"training_start_gps":data::calendar(start-3.*data::DAY)},
+            "guard":{"output_sha256":hash,"upload_allowed":true},
+            "tg6":{"engine_version":2,"archive":format!("{tg6_hash}.cep"),"metrics":{},
+                "guard":guard,"base_sha256":hash}});
+        files::json(&root(temp.path()).join("current.json"), &pointer).unwrap();
+        assert!(preflight(temp.path()).is_err());
+        assert_eq!(
+            preflight_for(temp.path(), CameraModel::Tg6).unwrap().0,
+            bytes
+        );
+        let mut stale = snapshot;
+        stale.checked_at_gps -= 3601.;
+        files::json(&root(temp.path()).join("data/health-state.json"), &stale).unwrap();
+        assert!(preflight_for(temp.path(), CameraModel::Tg6).is_err());
     }
     #[test]
     fn failed_refresh_revokes_previous_success_and_keeps_published_bytes() {

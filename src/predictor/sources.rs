@@ -287,7 +287,7 @@ fn validate_earth_orientation(bytes: &[u8], checked: f64) -> Result<()> {
     let frames = data::Frames::parse(text)?;
     // Cover the historical fitting/validation arc and the full GPS forecast.
     frames.matrix(checked - 32. * data::DAY)?;
-    frames.matrix(checked + 15. * data::DAY)?;
+    frames.matrix(checked + 33. * data::DAY)?;
     // Column 17 and 58 identify measured polar motion and UT1, respectively.
     // Bound prediction age independently of HTTP dates or download timestamps.
     // Astropy's IERS auto-refresh uses the same 30-day default age limit:
@@ -748,10 +748,10 @@ impl Sources {
             "Downloading observed GPS orbits from NOAA / IGS",
         ));
         let today = Utc::now().date_naive();
-        // Three days to fit, fourteen held-out days to validate TG-6 clocks,
-        // and two days for normal orbit-product latency. Older daily products
-        // are immutable cached evidence and are not downloaded each refresh.
-        let jobs: Vec<_> = (0..=19)
+        // Three fitting days plus product latency and maneuver-check history.
+        // Long-range clock diagnostics can use older cached products; their
+        // availability does not block current GPS assistance.
+        let jobs: Vec<_> = (0..=6)
             .map(|offset| {
                 let d = today - Days::days(offset);
                 let name = format!(
@@ -766,16 +766,7 @@ impl Sources {
         let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
         let results: Vec<_> = pool.install(|| {
             jobs.par_iter()
-                .enumerate()
-                .map(|(offset, (name, url))| {
-                    if offset >= 7
-                        && let Some(cached) = self.cached(name, f64::INFINITY, checked)
-                    {
-                        Ok(Some(cached))
-                    } else {
-                        self.fetch(url, name, true)
-                    }
-                })
+                .map(|(name, url)| self.fetch(url, name, true))
                 .collect()
         });
         for r in results {
@@ -1381,13 +1372,13 @@ mod tests {
     #[test]
     fn earth_orientation_requires_recent_measurements_and_complete_forecast_coverage() {
         let checked = health::now().unwrap();
-        assert!(validate_earth_orientation(&eop_table(-9, 20), checked).is_ok());
-        assert!(validate_earth_orientation(&eop_table(-29, 20), checked).is_ok());
+        assert!(validate_earth_orientation(&eop_table(-9, 40), checked).is_ok());
+        assert!(validate_earth_orientation(&eop_table(-29, 40), checked).is_ok());
         for invalid in [
             b"<html>Service unavailable</html>".to_vec(),
             vec![255; 185],
-            eop_table(-31, 20),
-            eop_table(1, 20),
+            eop_table(-31, 40),
+            eop_table(1, 40),
             eop_table(-9, 14),
         ] {
             assert!(validate_earth_orientation(&invalid, checked).is_err());
@@ -1399,7 +1390,7 @@ mod tests {
         let temp = crate::test_support::Temp::new();
         let mut source = Sources::new(temp.path()).unwrap();
         let checked = health::now().unwrap();
-        let bytes = eop_table(-9, 20);
+        let bytes = eop_table(-9, 40);
         let meta = Download {
             file: EOP_FILE.into(),
             url: EOP.into(),
@@ -1436,7 +1427,7 @@ mod tests {
         );
         files::atomic(&temp.path().join(EOP_FILE), b"corrupted").unwrap();
         assert!(source.cached_earth_orientation(checked).is_none());
-        let stale = eop_table(-31, 20);
+        let stale = eop_table(-31, 40);
         files::atomic(&temp.path().join(EOP_FILE), &stale).unwrap();
         let entry = source.manifest.get_mut("earth_orientation").unwrap();
         entry.bytes = stale.len();
@@ -1449,7 +1440,7 @@ mod tests {
     fn invalid_earth_orientation_response_cannot_overwrite_the_last_good_table() {
         use std::{io::Write, net::TcpListener};
         let temp = crate::test_support::Temp::new();
-        let bytes = eop_table(-9, 20);
+        let bytes = eop_table(-9, 40);
         files::atomic(&temp.path().join(EOP_FILE), &bytes).unwrap();
         let mut source = Sources::new(temp.path()).unwrap();
         source.client = Client::builder()

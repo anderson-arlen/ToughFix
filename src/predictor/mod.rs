@@ -72,7 +72,8 @@ pub struct Options {
 struct Satellite {
     prn: usize,
     fitted: physics::Fitted,
-    clock: clocks::Clock,
+    clock: Option<clocks::Clock>,
+    clock_error: Option<String>,
     tg6_clock: Option<clocks::Tg6Clock>,
     tg6_clock_error: Option<String>,
     states: Vec<[f64; 6]>,
@@ -135,15 +136,23 @@ impl Prediction<'_> {
             "Observed orbit fit RMS {:.3} m exceeds 5 m",
             fitted.rms_m
         );
-        let clock = clocks::select(train, self.rapid, prn, cutoff)?;
+        let (clock, clock_error) = match clocks::select(train, self.rapid, prn, cutoff) {
+            Ok(clock) => (Some(clock), None),
+            Err(error) => (None, Some(format!("{error:#}"))),
+        };
         let (tg6_clock, tg6_clock_error) =
             match clocks::select_tg6(train, self.rapid, self.history, prn, cutoff) {
                 Ok(clock) => (Some(clock), None),
                 Err(error) => (None, Some(format!("{error:#}"))),
             };
-        let trajectory = model.propagate(&[fitted.state], &[fitted.forces], 17. * DAY, 300.)?;
+        ensure!(
+            clock.is_some() || tg6_clock.is_some(),
+            "No usable observed satellite clock"
+        );
+        let span = (3 + clocks::TG6_FORECAST_DAYS) as f64 * DAY;
+        let trajectory = model.propagate(&[fitted.state], &[fitted.forces], span, 300.)?;
         let refined =
-            model.propagate_with_step(&[fitted.state], &[fitted.forces], 17. * DAY, 300., 30.)?;
+            model.propagate_with_step(&[fitted.state], &[fitted.forces], span, 300., 30.)?;
         let convergence_errors: Vec<_> = trajectory[864..]
             .iter()
             .zip(&refined[864..])
@@ -156,7 +165,10 @@ impl Prediction<'_> {
             "Eclipse/integration convergence exceeds 0.05 m RMS or 0.5 m maximum"
         );
         let states: Vec<_> = refined[864..].iter().map(|s| s[0]).collect();
-        ensure!(states.len() == 4033, "Forecast grid mismatch");
+        ensure!(
+            states.len() == clocks::TG6_FORECAST_DAYS * 288 + 1,
+            "Forecast grid mismatch"
+        );
         let fixed: Vec<_> = states
             .iter()
             .zip(future_frames)
@@ -167,6 +179,11 @@ impl Prediction<'_> {
         let mut errors = Vec::new();
         for week in 0..2 {
             let attempt = (|| -> Result<(Vec<u8>, Vec<f64>)> {
+                let clock = clock.as_ref().context(
+                    clock_error
+                        .clone()
+                        .unwrap_or_else(|| "Missing TG-1 clock".into()),
+                )?;
                 let mut parameters = Vec::new();
                 let mut local = Vec::new();
                 for slot in 0..28 {
@@ -244,6 +261,7 @@ impl Prediction<'_> {
             prn,
             fitted,
             clock,
+            clock_error,
             tg6_clock,
             tg6_clock_error,
             states,
@@ -299,13 +317,13 @@ pub fn generate(options: &Options, progress: impl Fn(Progress) + Sync) -> Result
         &frames,
         physics::Gravity::read(&options.data_dir.join("egm96.zip"))?,
         start,
-        cutoff + 14. * DAY,
+        cutoff + clocks::TG6_FORECAST_DAYS as f64 * DAY,
     )?;
     let rotations: Vec<_> = train
         .iter()
         .map(|s| frames.matrix(s.time))
         .collect::<Result<_>>()?;
-    let future_frames: Vec<_> = (0..=4032)
+    let future_frames: Vec<_> = (0..=clocks::TG6_FORECAST_DAYS * 288)
         .map(|i| frames.matrix(cutoff + i as f64 * 300.))
         .collect::<Result<_>>()?;
     let wanted = if options.satellites.is_empty() {
@@ -356,9 +374,14 @@ pub fn generate(options: &Options, progress: impl Fn(Progress) + Sync) -> Result
                 let result = prediction.satellite(prn);
                 let message = match &result {
                     Ok(s) => format!(
-                        "orbit RMS {:.3} m; {} usable weeks",
+                        "orbit RMS {:.3} m; TG-1: {} weeks; TG-6: {}",
                         s.fitted.rms_m,
-                        s.records.iter().filter(|r| r[1] == 0).count()
+                        s.records.iter().filter(|r| r[1] == 0).count(),
+                        if s.tg6_clock.is_some() {
+                            "28 days"
+                        } else {
+                            "clock unavailable"
+                        }
                     ),
                     Err(e) => format!("disabled: {e:#}"),
                 };
@@ -382,8 +405,10 @@ pub fn generate(options: &Options, progress: impl Fn(Progress) + Sync) -> Result
     for (prn, result) in results {
         match result {
             Ok(s) => {
-                *clock_sources.entry(s.clock.source.clone()).or_default() += 1;
-                health_start = health_start.min(s.clock.training_start_gps_seconds);
+                if let Some(clock) = s.clock.as_ref() {
+                    *clock_sources.entry(clock.source.clone()).or_default() += 1;
+                    health_start = health_start.min(clock.training_start_gps_seconds);
+                }
                 for (week, r) in s.records.into_iter().enumerate() {
                     weeks[week][prn - 1] = r;
                 }
@@ -407,7 +432,7 @@ pub fn generate(options: &Options, progress: impl Fn(Progress) + Sync) -> Result
                         json!({"elapsed":t,"acceleration":a.as_slice()})
                     })
                     .collect();
-                diagnostics.push(json!({"prn":s.prn,"fit":s.fitted,"clock":s.clock,"tg6_clock":s.tg6_clock,"tg6_clock_error":s.tg6_clock_error,"integration_convergence":s.convergence,"initial_acceleration_gcrs_mps2":acceleration.as_slice(),"acceleration_probes":probes,"trajectory_6h_gcrs":s.states.iter().step_by(72).collect::<Vec<_>>(),"trajectory_2h_gcrs":s.states.iter().step_by(24).take(168).collect::<Vec<_>>(),"trajectory_300s_itrf":s.fixed.iter().map(|v|v.as_slice()).collect::<Vec<_>>()}));
+                diagnostics.push(json!({"prn":s.prn,"fit":s.fitted,"clock":s.clock,"clock_error":s.clock_error,"tg6_clock":s.tg6_clock,"tg6_clock_error":s.tg6_clock_error,"integration_convergence":s.convergence,"initial_acceleration_gcrs_mps2":acceleration.as_slice(),"acceleration_probes":probes,"trajectory_6h_gcrs":s.states.iter().step_by(72).collect::<Vec<_>>(),"trajectory_2h_gcrs":s.states.iter().step_by(24).take(clocks::TG6_FORECAST_DAYS * 12).collect::<Vec<_>>(),"trajectory_300s_itrf":s.fixed.iter().map(|v|v.as_slice()).collect::<Vec<_>>()}));
                 satellites.push(prn);
             }
             Err(e) => flags.push(json!({"prn":prn,"reason":format!("{e:#}")})),
@@ -416,8 +441,13 @@ pub fn generate(options: &Options, progress: impl Fn(Progress) + Sync) -> Result
     ensure!(
         weeks[..2]
             .iter()
-            .all(|week| week.iter().filter(|r| r[1] == 0).count() >= 4),
-        "Fewer than four usable satellites in a prediction week; refusing empty assistance"
+            .all(|week| week.iter().filter(|r| r[1] == 0).count() >= 4)
+            || diagnostics
+                .iter()
+                .filter(|s| s["tg6_clock"].is_object())
+                .count()
+                >= 4,
+        "Fewer than four usable satellites for either camera format"
     );
     progress(Progress::new(
         RefreshStage::Validating,

@@ -1,5 +1,67 @@
 # TG-6: recent assistance-data accuracy
 
+## Four-week coverage (2026-10-24)
+
+TG-6 now follows the preserved official sample's **28-day span**, 336 two-hour
+orbit states, ancillary table sizes and two-day clock-reference look-back.
+Recent observed clock quality and satellite-health checks remain; historical
+long-range clock errors no longer remove otherwise usable current assistance.
+TG-1 retains its two-week format and clock-selection policy. The sections below
+describe earlier policies and experiments, rather than the current gate.
+
+The frozen October 24 18:00 GPS candidate retains **27 health-cleared satellites**.
+PRNs 5 and 8 lack acceptable source/fitting evidence; official outages exclude
+12, 15 and 18. There are no additional TG-6 format exclusions. This differs
+from the official sample's 28 satellites because its date and health conditions
+differ. An independent Python encoder reproduces the native file byte for byte.
+The public [validation summary](figures/tg6-four-week-validation.json) records
+hashes, counts and numerical results.
+
+A clock-only study freezes the production linear fits at 76 daily cutoffs from
+July 4 through September 17, using the same 106 observed Rapid products as the
+earlier study. Training excludes every future scoring observation. All five
+horizons below use the same **2,301 complete satellite/cutoff cases**, after
+TG-6 integer quantization. No common clock offset or outliers are removed.
+The fitter retains 30–32 clocks per cutoff before satellite-health exclusions
+(median 32); 48 of 2,432 attempted fits fail recent-data checks.
+
+| Forecast span | Median clock RMS | 95th-percentile clock RMS |
+| --- | ---: | ---: |
+| 1 day | 2.07 ns | 9.39 ns |
+| 3 days | 5.21 ns | 27.65 ns |
+| 7 days | 14.81 ns | 92.84 ns |
+| 14 days | 42.21 ns | 293.01 ns |
+| 28 days | 141.82 ns | 1,020.76 ns |
+
+These are satellite-clock errors, **not camera position errors** or acquisition
+measurements. Daily windows overlap, and historical product-arrival times are
+not reconstructed. The complete coefficients and results are retained locally
+under the ignored `research/clock-backtest/` archive. Reproduce with:
+
+```sh
+TOUGHFIX_CLOCK_AUDIT_DATA=research/clock-backtest/data TOUGHFIX_CLOCK_AUDIT_OUTPUT=research/clock-backtest/four-week-forecasts.json cargo test --locked predictor::clocks::audit_tests::export_tg6_four_week_clock_forecasts -- --ignored --exact
+python3 scripts/score-tg6-four-week.py --data-dir research/clock-backtest/data --forecasts research/clock-backtest/four-week-forecasts.json --output research/clock-backtest/four-week-validation.json
+```
+
+A separate complete orbit forecast, frozen at September 16 00:00 GPS, was
+compared with the next 28 days of observed positions. The raw 31-satellite
+candidate has median orbit error **14.40 m**, but RMS **149.41 km** and maximum
+**1,398.93 km**. Four satellites maneuvered during that month (PRNs 1, 12, 15,
+25); a pre-maneuver physical model cannot predict their later trajectories.
+Only PRN 1's maneuver had been announced by the forecast cutoff. The other
+three notices were issued later. Current health checks exclude announced
+outages, but cannot anticipate unannounced future maneuvers. These outliers
+remain in the reported results. The other 27 satellites' individual RMS errors
+range from 6.6 to 84.5 m, with maximum stored-knot error 204.9 m; that is a
+retrospective grouping, not a causal selection or an accuracy promise.
+
+Matching the official sample's format, duration and broad coverage does not
+establish equal prediction quality. The owner's later hike with very few fixes
+also means reliable acquisition has not been demonstrated. Receiver
+interpolation and ancillary timing still need verification; neither successful
+camera validation nor these numerical comparisons establish a 100-foot
+position bound or improved time to first fix.
+
 ## Does past clock-prediction error predict the next forecast? (2026-10-16)
 
 **For a fourteen-day linear forecast, yes in this sample. For one to three

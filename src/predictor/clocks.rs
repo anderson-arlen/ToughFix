@@ -18,8 +18,10 @@ pub struct Clock {
     pub training_end_gps_seconds: f64,
     pub selection_reason: String,
 }
-pub const TG6_FORECAST_DAYS: usize = 14;
+pub const TG6_FORECAST_DAYS: usize = 28;
+const CLOCK_BACKTEST_DAYS: usize = 14;
 const CLOCK_RMS_LIMIT_NS: f64 = 50.;
+#[cfg(test)]
 const TG6_FORECAST_MAX_NS: f64 = 150.;
 
 #[derive(Deserialize, Serialize)]
@@ -35,7 +37,7 @@ pub struct ForecastValidation {
 #[derive(Deserialize, Serialize)]
 pub struct Tg6Clock {
     pub model: Clock,
-    pub validation: ForecastValidation,
+    pub validation: Option<ForecastValidation>,
 }
 impl Tg6Clock {
     pub fn validate(&self, cutoff: f64) -> Result<()> {
@@ -62,22 +64,9 @@ impl Tg6Clock {
                 && (900. ..=48. * 3600.).contains(&(cutoff - c.training_end_gps_seconds)),
             "TG-6 linear clock failed recent-data quality checks"
         );
-        let v = &self.validation;
-        ensure!(
-            v.forecast_days == TG6_FORECAST_DAYS
-                && v.forecast_start_gps_seconds == cutoff - TG6_FORECAST_DAYS as f64 * DAY
-                && (900. ..=1800.)
-                    .contains(&(v.forecast_start_gps_seconds - v.training_end_gps_seconds))
-                && (900. ..=1800.).contains(&(cutoff - v.observed_end_gps_seconds))
-                && v.samples >= TG6_FORECAST_DAYS * 80
-                && v.rms_ns.is_finite()
-                && (0. ..=CLOCK_RMS_LIMIT_NS).contains(&v.rms_ns)
-                && v.max_absolute_ns.is_finite()
-                && (v.rms_ns..=TG6_FORECAST_MAX_NS).contains(&v.max_absolute_ns),
-            "TG-6 linear clock failed the past 14-day forecast check (RMS {:.1} ns, max {:.1} ns; limits 50/150 ns)",
-            v.rms_ns,
-            v.max_absolute_ns
-        );
+        // Historical long-range error is reported, not used to remove useful
+        // current assistance. Recent observed fit/step/held-out checks above
+        // still reject missing, discontinuous and unrepresentable clocks.
         Ok(())
     }
 }
@@ -218,12 +207,23 @@ fn select_model(
     }
     let candidate = model.fit(train, prn, cutoff);
     if let Ok(mut newer) = candidate {
-        let rms_limit = fallback
-            .as_ref()
-            .map_or(1., |r| (2. * r.training_rms_ns).max(1.));
-        let step_limit = fallback
-            .as_ref()
-            .map_or(5., |r| (4. * r.largest_step_ns).max(5.));
+        let absolute_linear = matches!(model, Model::Linear);
+        let rms_limit = fallback.as_ref().map_or(
+            if absolute_linear {
+                CLOCK_RMS_LIMIT_NS
+            } else {
+                1.
+            },
+            |r| (2. * r.training_rms_ns).max(1.),
+        );
+        let step_limit = fallback.as_ref().map_or(
+            if absolute_linear {
+                CLOCK_RMS_LIMIT_NS
+            } else {
+                5.
+            },
+            |r| (4. * r.largest_step_ns).max(5.),
+        );
         if newer.training_rms_ns <= rms_limit && newer.largest_step_ns <= step_limit {
             newer.source = "rapid+observed-ultra".into();
             newer.selection_reason = format!(
@@ -251,9 +251,8 @@ fn select_model(
 }
 
 /// Fit the TG-6's actual linear representation directly to observations. Its
-/// causal hindcast fits three days ending 14 days ago and scores the following
-/// full fortnight. No scored epoch is used by that historical fit, and no epoch
-/// at or after today's forecast cutoff influences either fit or validation.
+/// optional causal hindcast is diagnostic: failure two weeks ago does not
+/// withhold today's assistance. All fits exclude epochs at/after the cutoff.
 pub fn select_tg6(
     train: &[&Sample],
     rapid: &[Sample],
@@ -262,44 +261,44 @@ pub fn select_tg6(
     cutoff: f64,
 ) -> Result<Tg6Clock> {
     let model = select_model(train, rapid, prn, cutoff, Model::Linear)?;
-    let historical_cutoff = cutoff - TG6_FORECAST_DAYS as f64 * DAY;
+    let historical_cutoff = cutoff - CLOCK_BACKTEST_DAYS as f64 * DAY;
     let historical: Vec<_> = history
         .iter()
         .filter(|s| s.time < historical_cutoff)
         .collect();
-    let fit = fit_model(&historical, prn, historical_cutoff, Model::Linear)
-        .context("Missing usable historical linear clock fit for the 14-day forecast check")?;
-    let observed: Vec<_> = history
-        .iter()
-        .filter(|s| s.time >= historical_cutoff && s.time < cutoff)
-        .filter_map(|s| s.clocks[prn - 1].map(|clock| (s.time, clock)))
-        .collect();
-    ensure!(
-        observed.len() >= TG6_FORECAST_DAYS * 80
-            && observed
-                .first()
-                .is_some_and(|s| s.0 <= historical_cutoff + 900.)
-            && observed.windows(2).all(|w| w[1].0 - w[0].0 <= 3600.),
-        "Incomplete observed clocks for the past 14-day forecast check"
-    );
-    let errors: Vec<_> = observed
-        .iter()
-        .map(|&(time, clock)| {
-            (evaluate(&fit.coefficients, time - historical_cutoff - 10800.) - clock) * 1e9
-        })
-        .collect();
-    let clock = Tg6Clock {
-        model,
-        validation: ForecastValidation {
-            forecast_days: TG6_FORECAST_DAYS,
+    let validation = (|| -> Result<ForecastValidation> {
+        let fit = fit_model(&historical, prn, historical_cutoff, Model::Linear)?;
+        let observed: Vec<_> = history
+            .iter()
+            .filter(|s| s.time >= historical_cutoff && s.time < cutoff)
+            .filter_map(|s| s.clocks[prn - 1].map(|clock| (s.time, clock)))
+            .collect();
+        ensure!(
+            observed.len() >= CLOCK_BACKTEST_DAYS * 80
+                && observed
+                    .first()
+                    .is_some_and(|s| s.0 <= historical_cutoff + 900.)
+                && observed.windows(2).all(|w| w[1].0 - w[0].0 <= 3600.),
+            "Incomplete observed clocks for the past 14-day forecast check"
+        );
+        let errors: Vec<_> = observed
+            .iter()
+            .map(|&(time, clock)| {
+                (evaluate(&fit.coefficients, time - historical_cutoff - 10800.) - clock) * 1e9
+            })
+            .collect();
+        Ok(ForecastValidation {
+            forecast_days: CLOCK_BACKTEST_DAYS,
             forecast_start_gps_seconds: historical_cutoff,
             training_end_gps_seconds: fit.training_end_gps_seconds,
             observed_end_gps_seconds: observed.last().unwrap().0,
             samples: errors.len(),
             rms_ns: (errors.iter().map(|v| v * v).sum::<f64>() / errors.len() as f64).sqrt(),
             max_absolute_ns: errors.iter().map(|v| v.abs()).fold(0., f64::max),
-        },
-    };
+        })
+    })()
+    .ok();
+    let clock = Tg6Clock { model, validation };
     clock.validate(cutoff)?;
     Ok(clock)
 }
@@ -342,27 +341,31 @@ mod tests {
         assert_eq!(tg6.model.degree, 1);
         assert_eq!(tg6.model.coefficients[2], 0.);
         assert!((tg6.model.coefficients[0] - native.coefficients[0]).abs() > 1e-12);
-        assert_eq!(tg6.validation.samples, 14 * 96);
+        let validation = tg6.validation.as_ref().unwrap();
+        assert_eq!(validation.samples, 14 * 96);
         assert_eq!(
-            tg6.validation.training_end_gps_seconds,
+            validation.training_end_gps_seconds,
             cutoff - 14. * DAY - 900.
         );
-        assert!(tg6.validation.rms_ns < 50.);
-        assert!(tg6.validation.max_absolute_ns < 150.);
+        assert!(validation.rms_ns < 50.);
+        assert!(validation.max_absolute_ns < 150.);
     }
 
     #[test]
-    fn tg6_checks_full_fortnight_error_and_requires_historical_observations() {
+    fn tg6_reports_long_range_error_without_discarding_current_assistance() {
         let cutoff = 30. * DAY;
         let history = curved_history(cutoff, 5e-9);
         let train: Vec<_> = history.iter().collect();
         assert!(select(&train, &history, 1, cutoff).is_ok());
-        let error = select_tg6(&train, &history, &history, 1, cutoff)
-            .err()
-            .unwrap();
-        assert!(error.to_string().contains("past 14-day forecast check"));
+        let selected = select_tg6(&train, &history, &history, 1, cutoff).unwrap();
+        assert!(selected.validation.unwrap().rms_ns > 50.);
         let recent = &history[17 * 96..];
-        assert!(select_tg6(&train, &history, recent, 1, cutoff).is_err());
+        assert!(
+            select_tg6(&train, &history, recent, 1, cutoff)
+                .unwrap()
+                .validation
+                .is_none()
+        );
     }
 
     #[test]
@@ -407,6 +410,31 @@ mod tests {
                 }
             })
             .collect()
+    }
+    #[test]
+    fn tg6_keeps_useful_newer_clocks_when_a_rapid_fallback_is_unavailable() {
+        let cutoff = 10. * DAY;
+        let combined = samples(cutoff, true);
+        let train: Vec<_> = combined.iter().collect();
+        assert!(select(&train, &[], 1, cutoff).is_err());
+        let clock = select_tg6(&train, &[], &combined, 1, cutoff).unwrap();
+        assert!(clock.model.training_rms_ns > 1.);
+        assert!(clock.model.training_rms_ns < 50.);
+        assert!(clock.validation.is_none());
+        let mut unstable = combined.clone();
+        for (i, s) in unstable.iter_mut().enumerate().skip(192) {
+            s.clocks[0] = s.clocks[0].map(|v| v + if i % 2 == 0 { 80e-9 } else { -80e-9 });
+        }
+        assert!(
+            select_tg6(
+                &unstable.iter().collect::<Vec<_>>(),
+                &[],
+                &unstable,
+                1,
+                cutoff
+            )
+            .is_err()
+        );
     }
     #[test]
     fn noisy_newer_clocks_fall_back_without_changing_reference_epoch() {

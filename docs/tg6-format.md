@@ -2,9 +2,10 @@
 
 Investigated 2026-10-14. The TG-6 uses a different assistance format from the
 TG-1. The core selector-3 container, satellite states, clocks, and checksum are
-decoded, and the native app produces independent two-week assistance files.
+decoded, and the native app now produces independent four-week assistance files.
 A generated file has passed the connected camera's validation and commit.
-The owner then reported an outdoor GPS fix in roughly five seconds. Receiver
+Outdoor reports include an early fix in roughly five seconds and a later hike
+with very few geotagged photos. Receiver
 interpolation and ancillary consumer code have not been recovered. See the
 hardware record below for the precise scope of this evidence.
 
@@ -191,29 +192,35 @@ vendor assistance excerpt.
 
 Each prediction refresh generates separate TG-1 and TG-6 files from the same
 native fit. The published TG-6 file is bound to the hash of the current native
-health-guarded archive. Only satellites usable in **both** guarded weeks are
-retained, because each TG-6 record spans the whole fortnight. Stale health,
+archive for provenance, but TG-1 clock and polynomial exclusions do not limit
+TG-6 eligibility. TG-6 records span **28 days**, with **336 two-hour states**,
+matching the official sample. Its five ancillary tables contain respectively
+36, 186, 33, 66 and 126 scalars; satellite records begin at byte 1836.
+All 32 records fit in the 262144-byte transfer buffer. Actual satellite counts
+vary with available observations and health, rather than being fixed at the
+official sample's 28. Stale health,
 NANU outages, observed discontinuities, fewer than four eligible satellites,
 altered files, and cross-model file sizes block an upload.
 
 The current encoder uses a **separate linear clock fit to observations**.
 The TG-1 predictor continues choosing between linear and quadratic models;
 that choice no longer determines TG-6 eligibility. Existing source-quality,
-freshness and clock-step checks apply to the TG-6 fit. Its held-out past-day
-prediction must have RMS error at most 50 ns. An additional historical test
-fits the three days preceding `cutoff - 14 days`, then predicts the entire
-following fortnight using no observations from that scored interval. It
-requires at least 1,120 observed samples, no gaps over one hour, observations
-through the last half hour, RMS error at most **50 ns**, and maximum absolute
-error at most **150 ns**. Missing evidence blocks the satellite. The three-day
-training arc and fortnight of validation require 17 days of observed data.
+freshness and clock-step checks apply to the TG-6 fit. Observed-fit RMS,
+residual steps and held-out past-day RMS must each be at most **50 ns**.
+Newer clock observations still use relative residual gates when a recent Rapid
+fallback exists; without one, they use these absolute limits. Historical
+fourteen-day errors are recorded when cached observations permit, but no longer
+exclude otherwise useful current assistance. These application heuristics do
+not guarantee future clock accuracy.
 
-These limits are conservative application heuristics; historical performance
-does not guarantee future clock accuracy. The fitted model, original source
-times, full-period score, and rejection reason are recorded. The selected
-linear fit is reanchored to the orbit start and quantized into the existing
-offset/drift fields. A TG-6 Rapid fallback's older training interval is included
-in its own health check, without changing TG-1 eligibility.
+The selected linear fit is reanchored **two days before the first orbit state**,
+matching both preserved specimens, then quantized into the existing offset/drift
+fields. This changes its reference time without changing the predicted line,
+apart from integer rounding. A TG-6 Rapid fallback's older training interval is
+included in its own health check. Health checks cover the actual full 28-day
+archive independently of TG-1's two-week validity, including during upload
+preflight. The [four-week validation record](tg6-accuracy.md#four-week-coverage-2026-10-24)
+documents independent encoding parity and the limits of long-range prediction.
 
 The backend selects the prediction pointer and format by camera model. It
 uses the normal storage preparation/restoration, exclusive transport lock,
@@ -221,6 +228,14 @@ identity/selector checks, validation polling, commit acknowledgement, and
 per-camera receipts. The udev rules include the verified `07b4:012e` TG-6
 Storage endpoint. The installed runtime needs no Python, vendor updater, or
 vendor assistance server.
+
+On **2026-10-25 at 03:00:16 UTC** (October 24 locally), the same TG-6 accepted
+and committed the four-week file with **27 satellites**, valid from October 24
+18:00 through November 21 18:00 GPS. The 262144-byte file has SHA-256
+`3bf9dcbc2b51d6cad01f6273440f794d66b9046194f0261eb23afef0464bbf96`;
+the session closed successfully. The [public four-week summary](figures/tg6-four-week-validation.json)
+contains the acknowledgement without camera identity fields. No outdoor
+acquisition test of this file has been performed.
 
 On **2026-10-15 at 01:08:19 UTC** (October 14 locally), the connected TG-6,
 firmware 1.00, accepted and committed the first native health-cleared file:

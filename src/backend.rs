@@ -510,15 +510,17 @@ fn data_info(config: &Config, model: CameraModel) -> DataInfo {
     } else {
         camera::hash(&data)
     };
-    let start = if model == CameraModel::Tg6 {
+    let (start, end) = if model == CameraModel::Tg6 {
         crate::predictor::tg6::Archive::decode(&data)
-            .map(|a| a.start())
-            .unwrap_or(0.)
+            .map(|a| (a.start(), a.end()))
+            .unwrap_or((0., 0.))
     } else {
-        data.get(..4)
+        let start = data
+            .get(..4)
             .and_then(|b| b.try_into().ok())
             .map(u32::from_be_bytes)
-            .unwrap_or(0) as f64
+            .unwrap_or(0) as f64;
+        (start, start + 1209600.)
     };
     let fresh = guard["checked_at_gps"]
         .as_f64()
@@ -551,8 +553,11 @@ fn data_info(config: &Config, model: CameraModel) -> DataInfo {
     if data.len() != model.assistance_size() || guard["output_sha256"].as_str() != Some(&digest) {
         failures.push("Prediction file is missing or does not match its health report".into());
     }
-    if !(start <= now_gps() && now_gps() < start + 1209600.) {
-        failures.push("Predictions are outside their two-week window".into());
+    if !(start <= now_gps() && now_gps() < end) {
+        failures.push("Predictions are outside their validity window".into());
+    }
+    if model == CameraModel::Tg6 && pointer["engine_version"] != 2 {
+        failures.push("TG-6 needs a fresh four-week prediction".into());
     }
     let available = guard["available_prns_by_week"]
         .as_array()
@@ -600,7 +605,7 @@ fn data_info(config: &Config, model: CameraModel) -> DataInfo {
         training_end: text(metrics, "training_end_gps"),
         training_start: text(metrics, "training_start_gps"),
         start_gps: text(metrics, "forecast_start_gps"),
-        end_gps: crate::model::gps_calendar(start + 1209600.),
+        end_gps: crate::model::gps_calendar(end),
         sha256: digest,
         bytes: data.len(),
         available,

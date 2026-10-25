@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path};
 
 pub const CAPACITY: usize = 262144;
+pub const FORECAST_DAYS: usize = super::clocks::TG6_FORECAST_DAYS;
+pub const STATE_COUNT: usize = FORECAST_DAYS * 12;
+const CLOCK_REFERENCE_LOOKBACK: f64 = 2. * DAY;
 const MJD_GPS: f64 = 44244.;
 const STEP: f64 = 7200.;
 
@@ -256,7 +259,7 @@ fn ancillary(start: f64, days: usize, frames: &Frames) -> Result<Vec<Table>> {
     let day = (start / DAY).floor() * DAY;
     let mut sun = Vec::new();
     let sun_start = day - 5. * DAY;
-    for i in 0..days.div_ceil(4) + 4 {
+    for i in 0..days / 4 + 5 {
         let t = sun_start - DAY + i as f64 * 4. * DAY;
         let ((earth, _), warning) = erfars::ephemerides::Epv00(GPS_JD, t / DAY)
             .map_err(|e| anyhow::anyhow!("ERFA TG-6 Earth ephemeris: {e:?}"))?;
@@ -313,7 +316,7 @@ fn ancillary(start: f64, days: usize, frames: &Frames) -> Result<Vec<Table>> {
 }
 
 /// Export native orbit states with a separate, observed-data linear clock fit
-/// validated over a past fortnight. TG-1's selected clock model is independent.
+/// checked against recent observations. TG-1's selected clock is independent.
 pub fn generate(diagnostics: &Value, metrics: &Value, eop: &Path) -> Result<(Vec<u8>, Value)> {
     let start = data::epoch(
         diagnostics["forecast_start_gps"]
@@ -327,17 +330,13 @@ pub fn generate(diagnostics: &Value, metrics: &Value, eop: &Path) -> Result<(Vec
                 == Some(crate::camera::hash(&std::fs::read(eop)?).as_str()),
         "TG-6 forecast/Earth-orientation provenance mismatch"
     );
-    let available = metrics["available_prns_by_week"]
-        .as_array()
-        .context("Missing native coverage")?;
-    ensure!(available.len() >= 2, "Missing native two-week coverage");
     let mut records = Vec::new();
     let mut exclusions = Vec::new();
     let mut clock_reports = Vec::new();
+    let mut clock_sources = std::collections::BTreeMap::<String, usize>::new();
     let mut health_start = data::epoch(
-        metrics["health_training_start_gps"]
+        metrics["training_start_gps"]
             .as_str()
-            .or_else(|| metrics["training_start_gps"].as_str())
             .context("Missing native training epoch")?,
     )?;
     for s in diagnostics["satellites"]
@@ -346,12 +345,6 @@ pub fn generate(diagnostics: &Value, metrics: &Value, eop: &Path) -> Result<(Vec
     {
         let prn = s["prn"].as_u64().context("Missing native PRN")?;
         let attempt = (|| -> Result<Record> {
-            ensure!(
-                available[..2]
-                    .iter()
-                    .all(|w| w.as_array().is_some_and(|a| a.contains(&json!(prn)))),
-                "Not usable throughout the native two-week forecast"
-            );
             ensure!(
                 s["tg6_clock"].is_object(),
                 "{}",
@@ -365,7 +358,10 @@ pub fn generate(diagnostics: &Value, metrics: &Value, eop: &Path) -> Result<(Vec
             let rows = s["trajectory_2h_gcrs"]
                 .as_array()
                 .context("Missing two-hour native states")?;
-            ensure!(rows.len() == 168, "Incomplete native TG-6 trajectory");
+            ensure!(
+                rows.len() == STATE_COUNT,
+                "Incomplete native TG-6 trajectory"
+            );
             let mut states = Vec::new();
             for row in rows {
                 let v: Vec<f64> = serde_json::from_value(row.clone())?;
@@ -378,13 +374,14 @@ pub fn generate(diagnostics: &Value, metrics: &Value, eop: &Path) -> Result<(Vec
             }
             let record = Record {
                 prn: u16::try_from(prn)?,
-                clock_epoch: ticks(start)?,
-                bias: integer(c[0] - c[1] * 10800., 1e12)?,
+                clock_epoch: ticks(start - CLOCK_REFERENCE_LOOKBACK)?,
+                bias: integer(c[0] - c[1] * (10800. + CLOCK_REFERENCE_LOOKBACK), 1e12)?,
                 rate: integer(c[1], 1e20)?,
                 state_epoch: ticks(start)?,
                 states,
             };
             health_start = health_start.min(clock.model.training_start_gps_seconds);
+            *clock_sources.entry(clock.model.source.clone()).or_default() += 1;
             clock_reports.push(json!({"prn":prn,"source":clock.model.source,
                 "training_rms_ns":clock.model.training_rms_ns,"past_day_validation_ns":clock.model.past_day_validation_ns[0],
                 "forecast_validation":clock.validation}));
@@ -400,79 +397,77 @@ pub fn generate(diagnostics: &Value, metrics: &Value, eop: &Path) -> Result<(Vec
         "Fewer than four representable TG-6 satellites"
     );
     let archive = Archive {
-        tables: ancillary(start, 14, &Frames::read(eop)?)?,
+        tables: ancillary(start, FORECAST_DAYS, &Frames::read(eop)?)?,
         records,
         padded_size: CAPACITY,
     };
     let bytes = archive.encode()?;
     let mut report = metrics.clone();
     report["format"] = json!("tg6-state-vectors-v1");
+    report["forecast_days"] = json!(FORECAST_DAYS);
+    report["validity_end_exclusive_gps"] = json!(data::calendar(archive.end()));
     report["bytes"] = json!(bytes.len());
     report["sha256"] = json!(crate::camera::hash(&bytes));
     report["format_exclusions"] = json!(exclusions);
     report["clock_policy"] = json!(
-        "Independent observed-data linear fit; held-out past-day RMS <= 50 ns; past 14-day forecast RMS <= 50 ns and max <= 150 ns; existing source residual and freshness gates apply. Historical validation is not a future error guarantee."
+        "Independent recent observed linear fit: training and held-out past-day RMS <= 50 ns, residual steps <= 50 ns. Prefer a recent Rapid fallback when newer data exceed relative gates; without a fallback use these absolute limits. Historical fortnight errors are diagnostic, not constellation exclusions. No camera position-accuracy guarantee."
     );
     report["clock_validation"] = json!(clock_reports);
+    report["clock_sources"] = json!(clock_sources);
     report["health_training_start_gps"] = json!(data::calendar(health_start));
     let prns = archive.records.iter().map(|r| r.prn).collect::<Vec<_>>();
-    report["available_prns_by_week"] = json!([prns, prns]);
+    report["available_prns_by_week"] = json!([prns, prns, prns, prns]);
     report["upload_allowed"] = json!(false);
     report["model_warning"] = json!(
         "TG-6 candidate requires receiver validation and live satellite-health authorization"
     );
     report["broadcast_approximation"] = Value::Null;
-    report["archive_tail"] = json!("Two weeks of two-hour inertial state vectors");
+    report["archive_tail"] = json!("Four weeks of two-hour inertial state vectors");
     Ok((bytes, report))
 }
 
-/// A TG-6 record covers the full two weeks, so retain it only if the same
-/// satellite passes the native health guard for BOTH weeks. This deliberately
-/// shares the existing outage/discontinuity policy rather than duplicating it.
-pub fn guard(bytes: &[u8], base: &[u8], base_guard: &Value) -> Result<(Vec<u8>, Value)> {
-    use super::validation;
-    validation::validate(base)?;
+/// Apply the shared health policy over this archive's complete four weeks.
+/// TG-1 polynomial/clock exclusions do not determine TG-6 availability.
+pub fn guard(
+    bytes: &[u8],
+    training: f64,
+    snapshot: &super::health::Snapshot,
+    now: f64,
+) -> Result<(Vec<u8>, Value)> {
     let mut archive = Archive::decode(bytes)?;
     ensure!(
-        archive.start() == validation::start(base)? && archive.end() == archive.start() + 14. * DAY,
-        "TG-6/base prediction epochs differ"
+        archive.records[0].states.len() == STATE_COUNT,
+        "TG-6 predictions need a fresh four-week forecast"
     );
     let before: Vec<_> = archive.records.iter().map(|r| r.prn).collect();
-    archive.records.retain(|r| {
-        (0..2).all(|week| {
-            let pos = week * validation::BLOCK + 6 + (r.prn as usize - 1) * validation::RECORD;
-            base[pos + 1] == 0
-        })
-    });
-    ensure!(
-        !archive.records.is_empty(),
-        "Satellite health removed every TG-6 record"
-    );
+    let (eligible, mut report) = super::health::guard_prns(
+        &before,
+        training,
+        archive.start(),
+        archive.end(),
+        snapshot,
+        now,
+    )?;
+    archive.records.retain(|r| eligible.contains(&r.prn));
+    // Preserve decodability when health removes everything; the report blocks
+    // upload and the original immutable candidate remains available to inspect.
+    if archive.records.is_empty() {
+        report["available_prns_by_week"] = json!([[], [], [], []]);
+        report["removed_tg6_prns"] = json!(before);
+        report["output_sha256"] = json!(crate::camera::hash(bytes));
+        return Ok((bytes.to_vec(), report));
+    }
     let retained: Vec<_> = archive.records.iter().map(|r| r.prn).collect();
     let guarded = archive.encode()?;
-    let mut report = base_guard.clone();
-    report["available_prns_by_week"] = json!([retained, retained]);
+    report["available_prns_by_week"] = json!([retained, retained, retained, retained]);
     report["removed_tg6_prns"] = json!(
         before
             .iter()
             .filter(|p| !retained.contains(p))
             .collect::<Vec<_>>()
     );
-    let mut failures = base_guard["failures"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    if retained.len() < 4 {
-        failures.push(json!("Fewer than four safe, representable TG-6 satellites"));
-    }
-    report["upload_allowed"] =
-        json!(base_guard["upload_allowed"] == true && failures.is_empty() && retained.len() >= 4);
-    report["failures"] = json!(failures);
     report["output_sha256"] = json!(crate::camera::hash(&guarded));
     report["validation"] = archive.inspect();
-    report["rule"] = json!(
-        "Retain only satellites eligible in both native guarded weeks; never restore removed records without a new fit"
-    );
     Ok((guarded, report))
 }
 
@@ -534,7 +529,7 @@ pub fn cli(mut args: impl Iterator<Item = String>) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     const FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/tg6-state-vectors.bin");
 
@@ -570,7 +565,7 @@ mod tests {
         let mut diagnostics = json!({"forecast_start_gps":data::calendar(cutoff),
             "satellites":(1..=6).map(|prn| json!({"prn":prn,
                 "clock":{"degree":2,"coefficients":[1e-4,1e-12,1e-20]},
-                "tg6_clock":clock,"trajectory_2h_gcrs":vec![state.map(|v|v as f64);168].iter().map(|s|
+                "tg6_clock":clock,"trajectory_2h_gcrs":vec![state.map(|v|v as f64);STATE_COUNT].iter().map(|s|
                     s.iter().enumerate().map(|(k,v)|v/if k<3 {10.} else {1000.}).collect::<Vec<_>>()).collect::<Vec<_>>()
             })).collect::<Vec<_>>()});
         let metrics = json!({"forecast_start_gps":data::calendar(cutoff),"forecast_days":14,
@@ -580,10 +575,42 @@ mod tests {
         let (bytes, report) = generate(&diagnostics, &metrics, &eop).unwrap();
         let decoded = Archive::decode(&bytes).unwrap();
         assert_eq!(decoded.records.len(), 6);
-        assert_eq!(decoded.records[0].bias, 100_000_000);
+        assert_eq!(decoded.records[0].states.len(), 336);
+        assert_eq!(decoded.end() - decoded.start(), 28. * DAY);
+        assert_eq!(u16_at(&bytes, 2).unwrap(), 1836);
+        assert_eq!(
+            decoded
+                .tables
+                .iter()
+                .map(|t| t.values.len())
+                .collect::<Vec<_>>(),
+            vec![36, 186, 33, 66, 126]
+        );
+        assert_eq!(report["forecast_days"], 28);
+        assert_eq!(decoded.records[0].bias, 99_827_200);
+        assert_eq!(seconds(decoded.records[0].clock_epoch), cutoff - 2. * DAY);
         assert_eq!(decoded.records[0].rate, 100_000_000);
         assert_eq!(report["clock_validation"].as_array().unwrap().len(), 6);
-        diagnostics["satellites"][0]["tg6_clock"]["validation"]["max_absolute_ns"] = json!(151.);
+        let mut full = decoded.clone();
+        full.records = (1..=32)
+            .map(|prn| Record {
+                prn,
+                ..decoded.records[0].clone()
+            })
+            .collect();
+        let full_bytes = full.encode().unwrap();
+        assert_eq!(u32_at(&full_bytes, 4).unwrap(), 260656);
+        assert_eq!(Archive::decode(&full_bytes).unwrap().records.len(), 32);
+        diagnostics["satellites"][0]["tg6_clock"]["validation"]["max_absolute_ns"] = json!(1e6);
+        assert_eq!(
+            Archive::decode(&generate(&diagnostics, &metrics, &eop).unwrap().0)
+                .unwrap()
+                .records
+                .len(),
+            6
+        );
+        diagnostics["satellites"][0]["tg6_clock"]["model"]["past_day_validation_ns"][0] =
+            json!(51.);
         diagnostics["satellites"][1]["tg6_clock"]["model"]["degree"] = json!(2);
         let (bytes, report) = generate(&diagnostics, &metrics, &eop).unwrap();
         assert_eq!(
@@ -668,66 +695,95 @@ mod tests {
     fn clock_reference_and_integer_limits_are_explicit() {
         let a = 1e-4;
         let b = 1e-12;
-        let bias = integer(a - b * 10800., 1e12).unwrap();
+        let bias = integer(a - b * (10800. + CLOCK_REFERENCE_LOOKBACK), 1e12).unwrap();
         let rate = integer(b, 1e20).unwrap();
-        for dt in [0., 86400., 14. * DAY] {
+        for dt in [0., 86400., 14. * DAY, 28. * DAY] {
             let original = a + b * (dt - 10800.);
-            let encoded = bias as f64 * 1e-12 + rate as f64 * 1e-20 * dt;
+            let encoded =
+                bias as f64 * 1e-12 + rate as f64 * 1e-20 * (dt + CLOCK_REFERENCE_LOOKBACK);
             assert!((encoded - original).abs() < 0.6e-12);
         }
         assert!(integer(f64::NAN, 1.).is_err());
         assert!(integer(2147483648., 1.).is_err());
         assert!(ticks(1475971201.).is_err());
     }
-    pub(super) fn candidate(start: f64) -> Vec<u8> {
+    pub(crate) fn candidate(start: f64) -> Vec<u8> {
         let mut a = Archive::decode(FIXTURE).unwrap();
         let mut r = a.records[0].clone();
         r.state_epoch = ticks(start).unwrap();
         r.clock_epoch = r.state_epoch;
-        r.states = vec![r.states[0]; 168];
+        r.states = vec![r.states[0]; STATE_COUNT];
         a.records = (1..=6).map(|prn| Record { prn, ..r.clone() }).collect();
         a.padded_size = CAPACITY;
         a.encode().unwrap()
     }
     #[test]
-    fn health_guard_requires_both_weeks_and_never_restores_removed_prns() {
-        use super::super::{cep, validation};
+    fn health_guard_covers_all_four_weeks_and_never_restores_removed_prns() {
+        use super::super::health::{Event, Notice, Snapshot};
         let start = data::epoch("2026-10-14T00:00:00").unwrap();
-        let base = include_bytes!("../../tests/fixtures/working-camera.cep");
-        let mut weeks: Vec<Vec<Vec<u8>>> = (0..4)
-            .map(|w| {
-                (0..32)
-                    .map(|p| {
-                        let at = w * validation::BLOCK + 6 + p * validation::RECORD;
-                        base[at..at + validation::RECORD].to_vec()
-                    })
-                    .collect()
-            })
-            .collect();
-        weeks[1][1] = cep::unavailable();
-        let base = cep::archive(start, &weeks).unwrap();
-        let (guarded, report) = guard(
-            &candidate(start),
-            &base,
-            &json!({"upload_allowed":true,"failures":[]}),
-        )
-        .unwrap();
+        let now = start + 20. * DAY;
+        let mut snapshot = Snapshot {
+            schema_version: 1,
+            refresh_ok: true,
+            checked_at_gps: now,
+            latest_observed_gps: now,
+            latest_observed_by_prn: (1..=6).map(|p| (p.to_string(), now)).collect(),
+            notices: vec![],
+            orbit_events: vec![],
+            refresh_error: None,
+            latest_nanu: String::new(),
+        };
+        snapshot.orbit_events.push(Event {
+            prn: 2,
+            first_gps: start - 2. * DAY,
+            last_gps: start - 2. * DAY,
+            peak_innovation_m: 500.,
+            samples: 1,
+            reason: "Needs a new clean fit".into(),
+        });
+        snapshot.notices.push(Notice {
+            number: "2026001".into(),
+            kind: "FCSTDV".into(),
+            reference: None,
+            issued_gps: now,
+            issued_from_dtg: true,
+            prn: Some(3),
+            svn: None,
+            start_gps: Some(start + 25. * DAY),
+            stop_gps: Some(start + 26. * DAY),
+            review_required: false,
+            mentioned_prns: vec![3],
+        });
+        let (guarded, report) = guard(&candidate(start), start - 3. * DAY, &snapshot, now).unwrap();
         let prns: Vec<_> = Archive::decode(&guarded)
             .unwrap()
             .records
             .iter()
             .map(|r| r.prn)
             .collect();
-        assert_eq!(prns, vec![1, 3, 4, 5, 6]);
+        assert_eq!(prns, vec![1, 4, 5, 6]);
         assert_eq!(report["upload_allowed"], true);
-        assert_eq!(guard(&guarded, &base, &report).unwrap().0, guarded);
-        assert!(guard(&candidate(start + 7200.), &base, &report).is_err());
-        let (_, report) = guard(
-            &candidate(start),
-            &base,
-            &json!({"upload_allowed":false,"failures":["stale health"]}),
-        )
-        .unwrap();
+        assert_eq!(
+            guard(&guarded, start - 3. * DAY, &snapshot, now).unwrap().0,
+            guarded
+        );
+        assert_eq!(
+            report["available_prns_by_week"].as_array().unwrap().len(),
+            4
+        );
+        assert_eq!(
+            guard(
+                &candidate(start),
+                start - 3. * DAY,
+                &snapshot,
+                start + 28. * DAY
+            )
+            .unwrap()
+            .1["upload_allowed"],
+            false
+        );
+        snapshot.refresh_ok = false;
+        let (_, report) = guard(&candidate(start), start - 3. * DAY, &snapshot, now).unwrap();
         assert_eq!(report["upload_allowed"], false);
     }
 }

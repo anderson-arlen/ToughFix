@@ -352,7 +352,16 @@ impl State {
                 activity.title = progress.title().into();
                 activity.detail = if let Some((completed, total)) = progress.completed {
                     activity.fraction = Some(completed as f64 / total.max(1) as f64);
-                    format!("{completed} of {total} satellites processed · 14-day predictions")
+                    let days = if self
+                        .device
+                        .as_ref()
+                        .is_some_and(|d| d.model == CameraModel::Tg6)
+                    {
+                        28
+                    } else {
+                        14
+                    };
+                    format!("{completed} of {total} satellites processed · {days}-day predictions")
                 } else {
                     progress.detail.clone()
                 };
@@ -489,6 +498,17 @@ impl State {
         } else {
             self.data.end_gps.as_str()
         };
+        let count = if wait.is_some() && !self.matches_latest() {
+            self.receipt
+                .as_ref()
+                .and_then(|r| r.excluded_prns.as_ref())
+                .map(|prns| 32usize.saturating_sub(prns.len()))
+        } else {
+            self.data.available.first().copied()
+        };
+        let coverage = count.map_or_else(String::new, |n| {
+            format!("\nAssistance for {n} GPS satellites")
+        });
         let validity = if end.is_empty() {
             String::new()
         } else {
@@ -515,7 +535,7 @@ impl State {
         } else {
             String::new()
         };
-        format!("{status}{validity}{next}")
+        format!("{status}{coverage}{validity}{next}")
     }
 }
 

@@ -6,11 +6,14 @@ Hyprland with Waybar. The tray exists only while a supported Olympus camera is c
 in USB Storage mode. Left-click opens the window; its menu offers Open and
 Quit. Without a tray host, the window opens and explains the issue.
 
-TG-1 and TG-6 use separate independently generated GPS formats. The app checks
+TG-1 and TG-6 use separate independently generated GPS formats: 14 days for
+TG-1 and 28 days for TG-6. The GPS summary includes the eligible satellite count.
+The app checks
 the camera identity and assistance selector before choosing a file; Tough-8010
 remains status-only. TG-6 native generation, live health checks and USB commit
-have been tested on firmware 1.00. The owner reported an outdoor GPS fix in
-roughly five seconds after the upload; see
+have been tested on firmware 1.00. Outdoor reports include an early quick fix
+and a later hike with very few geotagged photos; acquisition improvement remains
+unverified. See
 [the validation record](../docs/tg6-format.md#native-integration-and-hardware-validation).
 
 Activity and progress stay pinned above the scrolling content, including in a
@@ -273,8 +276,11 @@ samples, IERS Earth orientation (with USNO and Astropy's IERS data mirror as bac
 and clocks are never fitted. Rapid observations take priority on overlap;
 observed Ultra-rapid data extend the three-day arc. Each satellite's clocks
 pass separate residual gates or fall back to a recent Rapid fit; the dashboard
-shows the clock-source counts. A complete three-day arc is required. Outages and
-observed disruptions remove unsafe satellite weeks; recovery needs a clean new
+shows the clock-source counts. TG-6 has its own linear clocks, independent of
+TG-1 exclusions. Its recent fit, step and held-out past-day limits remain 50 ns;
+historical long-range scores are diagnostic. A complete three-day arc is required. Outages and
+observed disruptions remove unsafe satellite weeks (or the TG-6 record spanning
+all four weeks); recovery needs a clean new
 fit. Network failures, malformed sources, stale health or observations, expired
 predictions, CRC/slot errors, and fewer than four usable current-week satellites
 block uploads. Existing assistance is never relabeled current.
