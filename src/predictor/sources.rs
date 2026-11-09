@@ -76,8 +76,16 @@ fn required_document(
 }
 
 fn advisory_date(text: &str, checked: f64) -> Result<NaiveDate> {
+    // NAVCEN prefixes its plain-text bulletin with a classification line;
+    // CelesTrak publishes the same bulletin without it.
+    let text = text.trim_start();
+    let text = text
+        .strip_prefix("UNCLASSIFIED\r\n")
+        .or_else(|| text.strip_prefix("UNCLASSIFIED\n"))
+        .unwrap_or(text)
+        .trim_start();
     ensure!(
-        text.trim_start().starts_with("GPS OPERATIONAL ADVISORY"),
+        text.starts_with("GPS OPERATIONAL ADVISORY"),
         "Unexpected operational advisory format"
     );
     let date = Regex::new(r"SUBJ:\s*GPS STATUS\s+(\d{1,2}\s+\w{3}\s+\d{4})")?
@@ -93,7 +101,7 @@ fn advisory_date(text: &str, checked: f64) -> Result<NaiveDate> {
     Ok(date)
 }
 
-fn mirror_catalog(text: &str, today: NaiveDate) -> Result<(String, String)> {
+fn mirror_catalog(text: &str, today: NaiveDate) -> Result<(Option<String>, String)> {
     #[derive(Deserialize)]
     struct Entry {
         #[serde(rename = "FILE_NAME")]
@@ -125,10 +133,9 @@ fn mirror_catalog(text: &str, today: NaiveDate) -> Result<(String, String)> {
             advisories.push((day, entry.file_name));
         }
     }
-    let number = numbers
-        .into_iter()
-        .max()
-        .context("CelesTrak directory lacks a recent NANU")?;
+    // This is a rolling directory, so a quiet period can leave it with only
+    // daily status files. The current advisory also names published NANUs.
+    let number = numbers.into_iter().max();
     let (_, advisory) = advisories
         .into_iter()
         .max()
@@ -156,28 +163,6 @@ fn notice_inputs_from(
         .as_ref()
         .map(|c| mirror_catalog(&c.text, today))
         .transpose()?;
-    let latest = if source == NoticeSource::Navcen {
-        required_document(
-            fetch,
-            "current_nanu",
-            &format!("{NAVCEN}nanu/current_nanu.nnu"),
-            "current_nanu.nnu",
-        )?
-    } else {
-        let number = &mirror.as_ref().unwrap().0;
-        let latest = required_document(
-            fetch,
-            "current_nanu",
-            &source.notice_url(number),
-            &format!("notices/{number}.nnu"),
-        )?;
-        ensure!(
-            health::parse_notice(&latest.text, latest.meta.known_at_gps)?.number == *number,
-            "Mirror's latest NANU number does not match its index"
-        );
-        latest
-    };
-    let notice = health::parse_notice(&latest.text, latest.meta.known_at_gps)?;
     let advisory = if source == NoticeSource::Navcen {
         required_document(
             fetch,
@@ -203,10 +188,48 @@ fn notice_inputs_from(
         file.text
     };
     advisory_date(&advisory, checked)?;
+    let advisory_numbers: BTreeSet<_> = Regex::new(r"(?m)^(\d{7})\s")?
+        .captures_iter(&advisory)
+        .map(|c| c[1].to_owned())
+        .collect();
+    let latest = if source == NoticeSource::Navcen {
+        required_document(
+            fetch,
+            "current_nanu",
+            &format!("{NAVCEN}nanu/current_nanu.nnu"),
+            "current_nanu.nnu",
+        )?
+    } else {
+        let number = mirror
+            .as_ref()
+            .unwrap()
+            .0
+            .iter()
+            .chain(advisory_numbers.iter())
+            .max()
+            .context("CelesTrak directory and advisory lack a recent NANU")?;
+        let year: i32 = number[..4].parse()?;
+        ensure!(
+            (today.year() - 1..=today.year()).contains(&year) && &number[4..] != "000",
+            "Invalid latest mirror NANU number"
+        );
+        let latest = required_document(
+            fetch,
+            "current_nanu",
+            &source.notice_url(number),
+            &format!("notices/{number}.nnu"),
+        )?;
+        ensure!(
+            health::parse_notice(&latest.text, latest.meta.known_at_gps)?.number == *number,
+            "Mirror's latest NANU number does not match its directory or advisory"
+        );
+        latest
+    };
+    let notice = health::parse_notice(&latest.text, latest.meta.known_at_gps)?;
     ensure!(
-        Regex::new(r"(?m)^(\d{7})\s")?
-            .captures_iter(&advisory)
-            .all(|c| c[1] <= *notice.number),
+        advisory_numbers
+            .iter()
+            .all(|number| *number <= notice.number),
         "Latest NANU index is behind the operational advisory"
     );
     let checked_at_gps = catalog
@@ -951,6 +974,116 @@ pub fn ultra_epoch(key: &str) -> Result<i64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn classification_header_preserves_advisory_format_and_freshness_checks() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 8).unwrap();
+        let checked = health::utc_gps(day.and_hms_opt(12, 0, 0).unwrap().and_utc()).unwrap();
+        let text = advisory(day, "2026101");
+        for prefix in ["", "\n  ", "UNCLASSIFIED\n", "\r\nUNCLASSIFIED\r\n"] {
+            assert_eq!(
+                advisory_date(&format!("{prefix}{text}"), checked).unwrap(),
+                day
+            );
+            for offset in [-4, 4] {
+                let stale = advisory(day + Days::days(offset), "2026101");
+                assert!(advisory_date(&format!("{prefix}{stale}"), checked).is_err());
+            }
+        }
+        for prefix in ["<html>", "Access denied\n", "UNCLASSIFIED invalid\n"] {
+            assert!(advisory_date(&format!("{prefix}{text}"), checked).is_err());
+        }
+    }
+
+    #[test]
+    fn published_navcen_advisory_accepts_classification_header() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 8).unwrap();
+        let checked = health::utc_gps(day.and_hms_opt(12, 0, 0).unwrap().and_utc()).unwrap();
+        let inputs = notice_inputs_from(
+            NoticeSource::Navcen,
+            &mut |key, url, file, _| {
+                let text = match key {
+                    "current_nanu" => include_str!("../../tests/fixtures/navcen-current.nnu"),
+                    "operational_advisory" => {
+                        include_str!("../../tests/fixtures/navcen-opsadvisory.oa1")
+                    }
+                    _ => panic!("Unexpected request {url}"),
+                };
+                Ok(Some(document(url, file, text.into(), checked)))
+            },
+            checked,
+            day,
+        )
+        .unwrap();
+        assert_eq!(inputs.notice.number, "2026101");
+        assert_eq!(inputs.checked_at_gps, checked);
+    }
+
+    #[test]
+    fn mirror_uses_fresh_advisory_when_rolling_catalog_has_no_notices() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 8).unwrap();
+        let checked = health::utc_gps(day.and_hms_opt(12, 0, 0).unwrap().and_utc()).unwrap();
+        let mut urls = Vec::new();
+        let inputs = notice_inputs_from(
+            NoticeSource::Celestrak,
+            &mut |key, url, file, missing_ok| {
+                assert!(!missing_ok);
+                urls.push(url.to_owned());
+                let text = match key {
+                    "celestrak-gps-index" => {
+                        include_str!("../../tests/fixtures/celestrak-gps-index.json")
+                    }
+                    "operational_advisory" => {
+                        include_str!("../../tests/fixtures/celestrak-status.txt")
+                    }
+                    "current_nanu" => include_str!("../../tests/fixtures/navcen-current.nnu"),
+                    _ => panic!("Unexpected request {url}"),
+                };
+                Ok(Some(document(url, file, text.into(), checked - 60.)))
+            },
+            checked,
+            day,
+        )
+        .unwrap();
+        assert_eq!(inputs.notice.number, "2026101");
+        assert_eq!(inputs.checked_at_gps, checked - 60.);
+        assert_eq!(inputs.next_check_at_gps, Some(checked + 3540.));
+        assert_eq!(
+            urls,
+            [
+                format!("{CELESTRAK}jsonDir.php"),
+                format!("{CELESTRAK}status/2026/status.20261108.txt"),
+                NoticeSource::Celestrak.notice_url("2026101"),
+            ]
+        );
+    }
+
+    #[test]
+    fn mirror_checks_both_directory_and_advisory_for_the_latest_notice() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 8).unwrap();
+        let checked = health::utc_gps(day.and_hms_opt(12, 0, 0).unwrap().and_utc()).unwrap();
+        for (indexed, listed) in [("2026100", "2026101"), ("2026101", "2026100")] {
+            let inputs = notice_inputs_from(
+                NoticeSource::Celestrak,
+                &mut |key, url, file, _| {
+                    let text = match key {
+                        "celestrak-gps-index" => catalog(day, indexed),
+                        "operational_advisory" => advisory(day, listed),
+                        "current_nanu" => {
+                            assert_eq!(url, NoticeSource::Celestrak.notice_url("2026101"));
+                            notice("2026101")
+                        }
+                        _ => panic!("Unexpected request {url}"),
+                    };
+                    Ok(Some(document(url, file, text, checked)))
+                },
+                checked,
+                day,
+            )
+            .unwrap();
+            assert_eq!(inputs.notice.number, "2026101");
+        }
+    }
+
     #[test]
     fn mirror_cache_reuses_numbered_and_dated_files_without_renewing_health_time() {
         let temp = crate::test_support::Temp::new();

@@ -10,6 +10,13 @@ the investigation archive, a camera, or network access.
   reference encoder, used to check the Rust bit writer.
 - `health-parity.json`: 80 public NAVCEN notices and expected lifecycle results,
   plus 22 health/guard cases with byte hashes from the independent reference policy.
+- `navcen-opsadvisory.oa1`, `navcen-current.nnu`, `celestrak-gps-index.json`,
+  and `celestrak-status.txt`: public satellite-health responses retrieved on
+  November 8, 2026. They reproduce NAVCEN's `UNCLASSIFIED` prefix and a
+  CelesTrak rolling directory with daily advisories but no NANU entries.
+  Sources: NAVCEN's `sites/default/files/gps/opsadvisory/current_opsadvisory.oa1`
+  and `sites/default/files/gps/nanu/current_nanu.nnu`, plus CelesTrak's
+  `GPS/jsonDir.php` and `GPS/status/2026/status.20261108.txt`.
 - `orbit-discontinuity.json`: 49 observed PRN 15 samples on September 25, 2026,
   from the named NOAA-distributed IGS rapid product. It checks discontinuity
   detection, event merging, and exclusion of future observations.
